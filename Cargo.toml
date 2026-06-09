@@ -1,0 +1,55 @@
+[package]
+name = "desert-shooter-engine"
+version = "0.2.0"
+edition = "2021"
+description = "Game engine 3D didática em Rust — renderização nativa OpenGL, Vulkan e DirectX"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "desert_shooter_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "desert-shooter"
+path = "src/main.rs"
+
+[dependencies]
+# Janela e input (não é game engine — só cria a janela e captura teclado/mouse)
+winit = "0.30"
+# Matemática 3D (vetores, matrizes)
+glam = "0.29"
+# Serialização de structs para a GPU (vertex buffer)
+bytemuck = { version = "1", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
+raw-window-handle = "0.6"
+
+# ── Backends gráficos (ative com --features) ──────────────────────────────────
+glutin = { version = "0.32", optional = true }
+glutin-winit = { version = "0.5", optional = true }
+gl = { version = "0.14", optional = true }
+ash = { version = "0.37", optional = true }
+ash-window = { version = "0.12", optional = true }
+shaderc = { version = "0.8", optional = true }
+libc = { version = "0.2", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[features]
+# Padrão: OpenGL (funciona em Windows, Linux e macOS)
+default = ["opengl"]
+# Backends de renderização implementados do zero:
+opengl = ["dep:glutin", "dep:glutin-winit", "dep:gl"]
+vulkan = ["dep:ash", "dep:ash-window", "dep:shaderc", "dep:libc"]
+directx = ["dep:windows"]
+# Compila todos os backends disponíveis na plataforma
+all-backends = ["opengl", "vulkan", "directx"]

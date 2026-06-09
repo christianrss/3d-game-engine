@@ -1,0 +1,72 @@
+//! # SceneBuilder — Construtor de Cenas
+//!
+//! Padrão Builder para montar mapa + alvos de forma declarativa.
+
+use crate::game::desert::build_desert;
+use crate::game::player::Player;
+use crate::game::world::GameWorld;
+use crate::math::Vec3;
+
+/// Constrói a cena do jogo.
+#[derive(Debug, Clone)]
+pub struct SceneBuilder {
+    pub use_desert: bool,
+    pub ground_size: f32,
+    pub targets: Vec<(Vec3, u32, f32)>,
+    pub player_spawn: Vec3,
+}
+
+impl SceneBuilder {
+    pub fn new() -> Self {
+        Self {
+            use_desert: false,
+            ground_size: 200.0,
+            targets: Vec::new(),
+            player_spawn: Vec3::new(0.0, 1.7, 8.0),
+        }
+    }
+
+    pub fn with_desert_map(mut self) -> Self {
+        self.use_desert = true;
+        self
+    }
+
+    pub fn add_target(mut self, position: Vec3) -> Self {
+        self.targets.push((position, 100, 1.0));
+        self
+    }
+
+    pub fn add_target_at(mut self, x: f32, y: f32, z: f32, points: u32) -> Self {
+        self.targets.push((Vec3::new(x, y, z), points, 1.0));
+        self
+    }
+
+    pub fn with_player_spawn(mut self, pos: Vec3) -> Self {
+        self.player_spawn = pos;
+        self
+    }
+
+    /// Constrói o mundo e o jogador a partir da configuração.
+    pub fn build(self) -> (GameWorld, Player) {
+        let mut world = GameWorld::default();
+
+        if self.use_desert {
+            build_desert(&mut world, self.ground_size);
+        }
+
+        for (pos, points, scale) in self.targets {
+            world.add_target(pos, points, scale);
+        }
+
+        let mut player = Player::default();
+        player.position = self.player_spawn;
+
+        (world, player)
+    }
+}
+
+impl Default for SceneBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
