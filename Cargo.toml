@@ -23,6 +23,14 @@ bytemuck = { version = "1", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
 raw-window-handle = "0.6"
+# Carregamento de modelos 3D open source (OBJ/glTF)
+tobj = "4"
+gltf = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Terreno procedural
+noise = "0.9"
+# Áudio (tiros, ambiente)
+rodio = "0.19"
 
 # ── Backends gráficos (ative com --features) ──────────────────────────────────
 glutin = { version = "0.32", optional = true }

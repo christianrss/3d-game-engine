@@ -1,157 +1,312 @@
-//! Código-fonte dos shaders — GLSL (OpenGL/Vulkan) e HLSL (DirectX).
-//!
-//! Manter os shaders como strings facilita o estudo: você vê exatamente
-//! o que a GPU executa.
+//! Shaders GLSL 330 — PBR, sombras, pós-processo.
 
-/// Vertex shader GLSL 330 — OpenGL 3.3
-///
-/// OpenGL 3.3 **não suporta** `layout(location=N)` em uniforms.
-/// Os nomes são resolvidos em runtime via `glGetUniformLocation`.
+pub const LIGHT_DIRECTION: [f32; 3] = [-0.42, -0.78, -0.38];
+
+/// Vertex principal — PBR + shadow map
 pub const VERTEX_GLSL_GL33: &str = r#"#version 330 core
 
 layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aColor;
-layout(location = 2) in vec3 aNormal;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUV;
+layout(location = 3) in vec3 aColor;
 
 uniform mat4 uMVP;
 uniform mat4 uModel;
-uniform vec3 uLightDir;
+uniform mat4 uLightSpaceMatrix;
 
 out vec3 vColor;
 out vec3 vNormal;
 out vec3 vWorldPos;
+out vec2 vUV;
+out vec4 vFragPosLightSpace;
 
 void main() {
     vec4 world = uModel * vec4(aPos, 1.0);
     vWorldPos = world.xyz;
-    vNormal = mat3(uModel) * aNormal;
+    vNormal = mat3(transpose(inverse(uModel))) * aNormal;
     vColor = aColor;
+    vUV = aUV;
+    vFragPosLightSpace = uLightSpaceMatrix * world;
     gl_Position = uMVP * vec4(aPos, 1.0);
 }
 "#;
 
-/// Fragment shader GLSL 330 — OpenGL 3.3
+/// Fragment PBR Cook-Torrance GGX + sombras PCF + névoa
 pub const FRAGMENT_GLSL_GL33: &str = r#"#version 330 core
 
 in vec3 vColor;
 in vec3 vNormal;
 in vec3 vWorldPos;
+in vec2 vUV;
+in vec4 vFragPosLightSpace;
 
 out vec4 FragColor;
 
 uniform vec3 uLightDir;
+uniform vec3 uCameraPos;
+uniform vec3 uFogColor;
+uniform float uFogDensity;
+uniform float uRoughness;
+uniform float uMetallic;
+uniform int uUseAlbedo;
+uniform int uUseNormalMap;
+uniform int uUseRoughMap;
+uniform int uUseAOMap;
+uniform float uTiling;
+
+uniform sampler2D uAlbedo;
+uniform sampler2D uNormalMap;
+uniform sampler2D uRoughMap;
+uniform sampler2D uAOMap;
+uniform sampler2D uShadowMap;
+
+const float PI = 3.14159265;
+
+float distributionGGX(vec3 N, vec3 H, float rough) {
+    float a = rough * rough;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    return a2 / max(PI * denom * denom, 0.0001);
+}
+
+float geometrySchlickGGX(float NdotV, float rough) {
+    float r = rough + 1.0;
+    float k = (r * r) / 8.0;
+    return NdotV / max(NdotV * (1.0 - k) + k, 0.0001);
+}
+
+float geometrySmith(vec3 N, vec3 V, vec3 L, float rough) {
+    float ggx1 = geometrySchlickGGX(max(dot(N, V), 0.0), rough);
+    float ggx2 = geometrySchlickGGX(max(dot(N, L), 0.0), rough);
+    return ggx1 * ggx2;
+}
+
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+float shadowPCF(vec4 fragPosLight) {
+    vec3 proj = fragPosLight.xyz / fragPosLight.w;
+    proj = proj * 0.5 + 0.5;
+    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
+        return 0.0;
+
+    float shadow = 0.0;
+    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+    float bias = 0.0025;
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            float pcf = texture(uShadowMap, proj.xy + vec2(x, y) * texel).r;
+            shadow += proj.z - bias > pcf ? 1.0 : 0.0;
+        }
+    }
+    return shadow / 9.0;
+}
+
+vec3 aces(vec3 x) {
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
 
 void main() {
-    vec3 norm = normalize(vNormal);
-    vec3 light = normalize(-uLightDir);
-    float diff = max(dot(norm, light), 0.15);
-    vec3 lit = vColor * diff;
-    FragColor = vec4(lit, 1.0);
+    vec2 uv = vUV * uTiling;
+
+    vec3 albedo = uUseAlbedo == 1 ? pow(texture(uAlbedo, uv).rgb, vec3(2.2)) : pow(vColor, vec3(2.2));
+    float rough = uUseRoughMap == 1 ? texture(uRoughMap, uv).r : uRoughness;
+    float ao = uUseAOMap == 1 ? texture(uAOMap, uv).r : 1.0;
+    rough = clamp(rough, 0.04, 1.0);
+
+    vec3 N = normalize(vNormal);
+    if (uUseNormalMap == 1) {
+        vec3 ntex = texture(uNormalMap, uv).rgb * 2.0 - 1.0;
+        N = normalize(N + ntex * 0.65);
+    }
+
+    vec3 V = normalize(uCameraPos - vWorldPos);
+    vec3 L = normalize(-uLightDir);
+    vec3 H = normalize(V + L);
+
+    vec3 F0 = mix(vec3(0.04), albedo, uMetallic);
+    float NDF = distributionGGX(N, H, rough);
+    float G = geometrySmith(N, V, L, rough);
+    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+    vec3 kS = F;
+    vec3 kD = (vec3(1.0) - kS) * (1.0 - uMetallic);
+    vec3 spec = (NDF * G * F) / max(4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0), 0.001);
+
+    float NdotL = max(dot(N, L), 0.0);
+    float shadow = shadowPCF(vFragPosLightSpace);
+
+    vec3 sunColor = vec3(1.0, 0.96, 0.88);
+    vec3 ambient = albedo * 0.12 * ao;
+    vec3 radiance = sunColor * (1.0 - shadow * 0.85);
+    vec3 color = ambient + (kD * albedo / PI + spec) * radiance * NdotL;
+
+    float dist = length(vWorldPos - uCameraPos);
+    float fog = 1.0 - exp(-uFogDensity * dist * dist);
+    color = mix(color, pow(uFogColor, vec3(2.2)), clamp(fog, 0.0, 0.9));
+
+    color = aces(color);
+    color = pow(color, vec3(1.0 / 2.2));
+    FragColor = vec4(color, 1.0);
 }
 "#;
 
-/// Vertex shader GLSL 450 — Vulkan (suporta layout em uniforms)
-pub const VERTEX_GLSL: &str = r#"#version 450 core
-
+/// Depth-only shadow pass
+pub const SHADOW_VERTEX_GLSL_GL33: &str = r#"#version 330 core
 layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aColor;
-layout(location = 2) in vec3 aNormal;
-
-layout(location = 0) uniform mat4 uMVP;
-layout(location = 1) uniform mat4 uModel;
-layout(location = 2) uniform vec3 uLightDir;
-
-out vec3 vColor;
-out vec3 vNormal;
-out vec3 vWorldPos;
-
+uniform mat4 uLightSpaceMatrix;
+uniform mat4 uModel;
 void main() {
-    vec4 world = uModel * vec4(aPos, 1.0);
-    vWorldPos = world.xyz;
-    vNormal = mat3(uModel) * aNormal;
-    vColor = aColor;
-    gl_Position = uMVP * vec4(aPos, 1.0);
+    gl_Position = uLightSpaceMatrix * uModel * vec4(aPos, 1.0);
 }
 "#;
 
-/// Fragment shader GLSL 450 — Vulkan
-pub const FRAGMENT_GLSL: &str = r#"#version 450 core
+pub const SHADOW_FRAGMENT_GLSL_GL33: &str = r#"#version 330 core
+void main() {}
+"#;
 
-in vec3 vColor;
-in vec3 vNormal;
-in vec3 vWorldPos;
+/// Céu atmosférico
+pub const SKY_VERTEX_GLSL_GL33: &str = r#"#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 uViewProj;
+out vec3 vDir;
+void main() {
+    vDir = aPos;
+    vec4 clip = uViewProj * vec4(aPos, 1.0);
+    gl_Position = clip.xyww;
+}
+"#;
 
+pub const SKY_FRAGMENT_GLSL_GL33: &str = r#"#version 330 core
+in vec3 vDir;
 out vec4 FragColor;
-
-layout(location = 2) uniform vec3 uLightDir;
-
 void main() {
-    vec3 norm = normalize(vNormal);
-    vec3 light = normalize(-uLightDir);
-    float diff = max(dot(norm, light), 0.15);
-    vec3 lit = vColor * diff;
-    FragColor = vec4(lit, 1.0);
+    vec3 dir = normalize(vDir);
+    float y = clamp(dir.y, 0.0, 1.0);
+    vec3 horizon = vec3(0.95, 0.68, 0.38);
+    vec3 zenith = vec3(0.22, 0.48, 0.82);
+    vec3 col = mix(horizon, zenith, pow(y, 0.5));
+    vec3 sunDir = normalize(vec3(0.42, 0.28, -0.85));
+    float sun = pow(max(dot(dir, sunDir), 0.0), 512.0);
+    float glow = pow(max(dot(dir, sunDir), 0.0), 6.0) * 0.45;
+    col += vec3(1.0, 0.9, 0.7) * (sun * 4.0 + glow);
+    FragColor = vec4(col, 1.0);
 }
 "#;
 
-/// Vertex shader HLSL (DirectX 11)
+/// Pós-processo bloom + vignette
+pub const POST_VERTEX_GLSL_GL33: &str = r#"#version 330 core
+layout(location = 0) in vec2 aPos;
+out vec2 vUV;
+void main() {
+    vUV = aPos * 0.5 + 0.5;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+"#;
+
+/// Pós-processo: SSAO (screen-space, alternativa leve ao ray tracing) + bloom
+pub const POST_FRAGMENT_GLSL_GL33: &str = r#"#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+uniform sampler2D uScene;
+uniform sampler2D uDepth;
+uniform vec2 uTexelSize;
+uniform float uNear;
+uniform float uFar;
+
+float linearizeDepth(float d) {
+    float z = d * 2.0 - 1.0;
+    return (2.0 * uNear * uFar) / (uFar + uNear - z * (uFar - uNear));
+}
+
+float ssao(vec2 uv) {
+    float depth = linearizeDepth(texture(uDepth, uv).r);
+    float ao = 0.0;
+    const int S = 8;
+    for (int i = 0; i < S; i++) {
+        float ang = float(i) * 0.785398;
+        vec2 off = vec2(cos(ang), sin(ang)) * uTexelSize * float(3 + i);
+        float d2 = linearizeDepth(texture(uDepth, uv + off).r);
+        if (d2 > depth + 0.8) ao += 1.0;
+    }
+    return 1.0 - (ao / float(S)) * 0.55;
+}
+
+void main() {
+    vec3 col = texture(uScene, vUV).rgb;
+    col *= ssao(vUV);
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    vec3 bloom = vec3(0.0);
+    if (lum > 0.75) {
+        for (int x = -2; x <= 2; x++) {
+            for (int y = -2; y <= 2; y++) {
+                vec2 off = vec2(x, y) * uTexelSize * 2.0;
+                vec3 s = texture(uScene, vUV + off).rgb;
+                float l = dot(s, vec3(0.2126, 0.7152, 0.0722));
+                if (l > 0.75) bloom += s;
+            }
+        }
+        bloom /= 25.0;
+    }
+    col += bloom * 0.35;
+    float vig = 1.0 - dot(vUV - 0.5, vUV - 0.5) * 1.8;
+    col *= clamp(vig, 0.55, 1.0);
+    col = pow(col, vec3(1.0 / 2.2));
+    FragColor = vec4(col, 1.0);
+}
+"#;
+
+pub const PARTICLE_VERTEX_GLSL_GL33: &str = r#"#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in float aSize;
+layout(location = 2) in float aAlpha;
+uniform mat4 uMVP;
+out float vAlpha;
+void main() {
+    vAlpha = aAlpha;
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    gl_PointSize = aSize * 420.0 / max(-gl_Position.w, 0.1);
+}
+"#;
+
+pub const PARTICLE_FRAGMENT_GLSL_GL33: &str = r#"#version 330 core
+in float vAlpha;
+out vec4 FragColor;
+void main() {
+    vec2 c = gl_PointCoord - vec2(0.5);
+    float d = dot(c, c);
+    if (d > 0.25) discard;
+    float soft = 1.0 - smoothstep(0.08, 0.25, d);
+    FragColor = vec4(0.75, 0.72, 0.68, soft * vAlpha * 0.65);
+}
+"#;
+
+// Vulkan / DirectX stubs (layout compatível)
+pub const VERTEX_GLSL: &str = VERTEX_GLSL_GL33;
+pub const FRAGMENT_GLSL: &str = FRAGMENT_GLSL_GL33;
+
 #[cfg(all(feature = "directx", target_os = "windows"))]
 pub const VERTEX_HLSL: &str = r#"
 cbuffer Transform : register(b0) {
-    float4x4 mvp;
-    float4x4 model;
-    float3 lightDir;
-    float _pad;
+    float4x4 mvp; float4x4 model; float3 lightDir; float _pad;
 };
-
-struct VSIn {
-    float3 pos    : POSITION;
-    float3 color  : COLOR;
-    float3 normal : NORMAL;
-};
-
-struct VSOut {
-    float4 pos      : SV_POSITION;
-    float3 color    : COLOR;
-    float3 normal   : NORMAL;
-    float3 worldPos : TEXCOORD0;
-};
-
+struct VSIn { float3 pos : POSITION; float3 normal : NORMAL; float2 uv : TEXCOORD0; float3 color : COLOR; };
+struct VSOut { float4 pos : SV_POSITION; float3 color : COLOR; float3 normal : NORMAL; float3 worldPos : TEXCOORD0; };
 VSOut main(VSIn input) {
-    VSOut o;
-    float4 world = mul(model, float4(input.pos, 1.0));
-    o.worldPos = world.xyz;
-    o.normal = mul((float3x3)model, input.normal);
-    o.color = input.color;
-    o.pos = mul(mvp, float4(input.pos, 1.0));
-    return o;
+    VSOut o; float4 world = mul(model, float4(input.pos, 1.0));
+    o.worldPos = world.xyz; o.normal = mul((float3x3)model, input.normal);
+    o.color = input.color; o.pos = mul(mvp, float4(input.pos, 1.0)); return o;
 }
 "#;
 
-/// Fragment shader HLSL (DirectX 11)
 #[cfg(all(feature = "directx", target_os = "windows"))]
 pub const FRAGMENT_HLSL: &str = r#"
-cbuffer Transform : register(b0) {
-    float4x4 mvp;
-    float4x4 model;
-    float3 lightDir;
-    float _pad;
-};
-
-struct PSIn {
-    float4 pos      : SV_POSITION;
-    float3 color    : COLOR;
-    float3 normal   : NORMAL;
-    float3 worldPos : TEXCOORD0;
-};
-
+struct PSIn { float4 pos : SV_POSITION; float3 color : COLOR; float3 normal : NORMAL; float3 worldPos : TEXCOORD0; };
 float4 main(PSIn input) : SV_Target {
-    float3 norm = normalize(input.normal);
-    float3 light = normalize(-lightDir);
-    float diff = max(dot(norm, light), 0.15);
+    float3 norm = normalize(input.normal); float diff = max(dot(norm, float3(0.4, 0.8, 0.3)), 0.2);
     return float4(input.color * diff, 1.0);
 }
 "#;
-
-/// Direção da luz do sol no deserto (normalizada).
-pub const LIGHT_DIRECTION: [f32; 3] = [-0.4, -0.8, -0.3];

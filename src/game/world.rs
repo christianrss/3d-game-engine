@@ -1,24 +1,24 @@
 //! Estado do mundo — objetos renderizáveis e alvos.
 
-use crate::graphics::Color;
+use crate::graphics::DrawMaterial;
 use crate::math::{Mat4, Quat, Vec3};
 
-/// Objeto decorativo ou parte do mapa.
 #[derive(Debug, Clone)]
 pub struct Drawable {
-    pub mesh_name: String,
+    pub model_id: String,
     pub position: Vec3,
+    pub rotation: Quat,
     pub scale: Vec3,
-    pub color: Color,
+    pub material: DrawMaterial,
+    pub target_id: Option<u32>,
 }
 
 impl Drawable {
     pub fn model_matrix(&self) -> Mat4 {
-        Mat4::from_scale_rotation_translation(self.scale, Quat::IDENTITY, self.position)
+        Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
     }
 }
 
-/// Alvo atirável.
 #[derive(Debug, Clone)]
 pub struct Target {
     pub id: u32,
@@ -26,11 +26,9 @@ pub struct Target {
     pub radius: f32,
     pub points: u32,
     pub alive: bool,
-    pub mesh_name: String,
     pub scale: f32,
 }
 
-/// Mundo do jogo — tudo que existe na cena.
 #[derive(Debug)]
 pub struct GameWorld {
     pub drawables: Vec<Drawable>,
@@ -53,34 +51,28 @@ impl GameWorld {
         self.drawables.push(drawable);
     }
 
+    /// Alvo realista — placa metálica em poste.
     pub fn add_target(&mut self, position: Vec3, points: u32, scale: f32) {
         let id = self.next_target_id;
         self.next_target_id += 1;
 
-        // Pedestal
-        self.drawables.push(Drawable {
-            mesh_name: "cylinder".into(),
-            position,
-            scale: Vec3::new(0.4 * scale, 0.15 * scale, 0.4 * scale),
-            color: Color::PEDESTAL,
-        });
+        let hit_center = position + Vec3::new(0.0, 1.5 * scale, 0.08 * scale);
 
-        // Esfera do alvo
-        let sphere_pos = position + Vec3::new(0.0, 0.9 * scale, 0.0);
         self.drawables.push(Drawable {
-            mesh_name: "sphere".into(),
-            position: sphere_pos,
-            scale: Vec3::splat(0.6 * scale),
-            color: Color::TARGET_RED,
+            model_id: "target".into(),
+            position,
+            rotation: Quat::from_rotation_y((position.x * 0.07).sin()),
+            scale: Vec3::splat(scale),
+            material: DrawMaterial::metal(),
+            target_id: Some(id),
         });
 
         self.targets.push(Target {
             id,
-            position: sphere_pos,
-            radius: 0.6 * scale,
+            position: hit_center,
+            radius: 0.55 * scale,
             points,
             alive: true,
-            mesh_name: "sphere".into(),
             scale,
         });
     }
@@ -91,5 +83,9 @@ impl GameWorld {
 
     pub fn all_targets_destroyed(&self) -> bool {
         !self.targets.is_empty() && self.alive_targets() == 0
+    }
+
+    pub fn remove_target_drawables(&mut self, target_id: u32) {
+        self.drawables.retain(|d| d.target_id != Some(target_id));
     }
 }

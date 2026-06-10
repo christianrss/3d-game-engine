@@ -289,7 +289,25 @@ impl GfxBackend for DirectX11Renderer {
         }
     }
 
-    fn draw(&mut self, gpu_mesh: &GpuMesh, model: Mat4, camera: &Camera) -> Result<(), String> {
+    fn upload_texture(
+        &mut self,
+        data: &crate::graphics::TextureData,
+    ) -> Result<crate::graphics::GpuTexture, String> {
+        let _ = data;
+        Ok(crate::graphics::GpuTexture {
+            gpu_id: 0,
+            width: 1,
+            height: 1,
+        })
+    }
+
+    fn draw(
+        &mut self,
+        gpu_mesh: &GpuMesh,
+        model: Mat4,
+        camera: &Camera,
+        _material: crate::graphics::DrawMaterial,
+    ) -> Result<(), String> {
         let mesh = self
             .meshes
             .get(&gpu_mesh.gpu_id)
@@ -401,7 +419,7 @@ unsafe fn create_input_layout(
             InstanceDataStepRate: 0,
         },
         D3D11_INPUT_ELEMENT_DESC {
-            SemanticName: windows::core::PCSTR(b"COLOR\0".as_ptr()),
+            SemanticName: windows::core::PCSTR(b"NORMAL\0".as_ptr()),
             SemanticIndex: 0,
             Format: DXGI_FORMAT_R32G32B32_FLOAT,
             InputSlot: 0,
@@ -410,11 +428,20 @@ unsafe fn create_input_layout(
             InstanceDataStepRate: 0,
         },
         D3D11_INPUT_ELEMENT_DESC {
-            SemanticName: windows::core::PCSTR(b"NORMAL\0".as_ptr()),
+            SemanticName: windows::core::PCSTR(b"TEXCOORD\0".as_ptr()),
+            SemanticIndex: 0,
+            Format: DXGI_FORMAT_R32G32_FLOAT,
+            InputSlot: 0,
+            AlignedByteOffset: 24,
+            InputSlotClass: D3D11_INPUT_CLASSIFICATION(D3D11_INPUT_PER_VERTEX_DATA.0 as i32),
+            InstanceDataStepRate: 0,
+        },
+        D3D11_INPUT_ELEMENT_DESC {
+            SemanticName: windows::core::PCSTR(b"COLOR\0".as_ptr()),
             SemanticIndex: 0,
             Format: DXGI_FORMAT_R32G32B32_FLOAT,
             InputSlot: 0,
-            AlignedByteOffset: 24,
+            AlignedByteOffset: 32,
             InputSlotClass: D3D11_INPUT_CLASSIFICATION(D3D11_INPUT_PER_VERTEX_DATA.0 as i32),
             InstanceDataStepRate: 0,
         },

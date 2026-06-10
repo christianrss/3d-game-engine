@@ -3,7 +3,7 @@
 //! Cada backend (OpenGL, Vulkan, DirectX) implementa este trait.
 //! O jogo nunca chama APIs gráficas diretamente — só usa o trait.
 
-use crate::graphics::{Camera, Color, GpuMesh, Mesh};
+use crate::graphics::{Camera, Color, DrawMaterial, GpuMesh, GpuTexture, Mesh, TextureData};
 use crate::math::Mat4;
 use std::fmt::Debug;
 
@@ -54,11 +54,40 @@ pub trait GfxBackend {
     /// Envia uma mesh da CPU para a memória da GPU.
     fn upload_mesh(&mut self, mesh: &Mesh) -> Result<GpuMesh, Self::Error>;
 
-    /// Inicia um novo frame (limpa o framebuffer).
+    /// Envia textura RGBA8 para a GPU.
+    fn upload_texture(&mut self, data: &TextureData) -> Result<GpuTexture, Self::Error>;
+
+    /// Inicia um novo frame.
     fn begin_frame(&mut self, clear: Color);
 
-    /// Desenha uma mesh com a matriz MVP (Model-View-Projection).
-    fn draw(&mut self, gpu_mesh: &GpuMesh, model: Mat4, camera: &Camera) -> Result<(), Self::Error>;
+    fn begin_shadow_pass(&mut self, _camera: &Camera) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn draw_shadow(&mut self, _gpu_mesh: &GpuMesh, _model: Mat4) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn end_shadow_pass(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn begin_scene_pass(&mut self, clear: Color) -> Result<(), Self::Error> {
+        self.begin_frame(clear);
+        Ok(())
+    }
+    fn end_scene_pass(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn draw_sky(&mut self, _camera: &Camera) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn draw(
+        &mut self,
+        gpu_mesh: &GpuMesh,
+        model: Mat4,
+        camera: &Camera,
+        material: DrawMaterial,
+    ) -> Result<(), Self::Error>;
 
     /// Finaliza o frame e apresenta na tela (swap buffers / present).
     fn end_frame(&mut self) -> Result<(), Self::Error>;

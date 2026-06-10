@@ -11,7 +11,7 @@ pub fn try_shoot(
     origin: Vec3,
     direction: Vec3,
     max_range: f32,
-) -> Option<u32> {
+) -> Option<(u32, Vec3)> {
     let mut best: Option<(usize, f32, u32)> = None;
 
     for (i, target) in world.targets.iter().enumerate() {
@@ -31,21 +31,16 @@ pub fn try_shoot(
 
     match best {
         Some((idx, _, points)) => {
-            let pos = world.targets[idx].position;
+            let target_id = world.targets[idx].id;
+            let hit_pos = world.targets[idx].position;
             world.targets[idx].alive = false;
-            hide_target_drawables(world, pos);
+            world.remove_target_drawables(target_id);
             score.register_hit(points);
-            Some(points)
+            Some((points, hit_pos))
         }
         None => {
             score.register_miss();
             None
         }
     }
-}
-
-fn hide_target_drawables(world: &mut GameWorld, target_pos: crate::math::Vec3) {
-    world.drawables.retain(|d| {
-        !(d.mesh_name == "sphere" && (d.position - target_pos).length_squared() < 0.01)
-    });
 }

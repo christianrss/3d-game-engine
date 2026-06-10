@@ -2,6 +2,7 @@
 //!
 //! Padrão Builder para montar mapa + alvos de forma declarativa.
 
+use crate::assets::sample_desert_height;
 use crate::game::desert::build_desert;
 use crate::game::player::Player;
 use crate::game::world::GameWorld;
@@ -55,11 +56,17 @@ impl SceneBuilder {
         }
 
         for (pos, points, scale) in self.targets {
-            world.add_target(pos, points, scale);
+            let ground = sample_desert_height(pos.x, pos.z);
+            world.add_target(Vec3::new(pos.x, ground, pos.z), points, scale);
         }
 
         let mut player = Player::default();
-        player.position = self.player_spawn;
+        let spawn_y = sample_desert_height(self.player_spawn.x, self.player_spawn.z);
+        player.position = Vec3::new(
+            self.player_spawn.x,
+            spawn_y + 1.7,
+            self.player_spawn.z,
+        );
 
         (world, player)
     }

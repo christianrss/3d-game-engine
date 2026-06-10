@@ -1,5 +1,6 @@
 //! Jogador em primeira pessoa.
 
+use crate::assets::sample_desert_height;
 use crate::game::input::InputState;
 use crate::graphics::Camera;
 use crate::math::{Quat, Vec3};
@@ -12,6 +13,8 @@ pub struct Player {
     pub walk_speed: f32,
     pub run_speed: f32,
     pub mouse_sensitivity: f32,
+    pub is_moving: bool,
+    pub is_sprinting: bool,
 }
 
 impl Default for Player {
@@ -23,6 +26,8 @@ impl Default for Player {
             walk_speed: 5.0,
             run_speed: 9.0,
             mouse_sensitivity: 0.002,
+            is_moving: false,
+            is_sprinting: false,
         }
     }
 }
@@ -49,7 +54,10 @@ impl Player {
             dir.x += 1.0;
         }
 
-        if dir.length_squared() > 0.0 {
+        self.is_moving = dir.length_squared() > 0.0;
+        self.is_sprinting = self.is_moving && input.run;
+
+        if self.is_moving {
             dir = dir.normalize();
             let rotation = Quat::from_euler(glam::EulerRot::YXZ, self.yaw, 0.0, 0.0);
             let forward = rotation * Vec3::NEG_Z;
@@ -63,7 +71,7 @@ impl Player {
             self.position += world_dir * speed * dt;
         }
 
-        self.position.y = 1.7;
+        self.position.y = sample_desert_height(self.position.x, self.position.z) + 1.7;
     }
 
     pub fn to_camera(&self, aspect: f32) -> Camera {

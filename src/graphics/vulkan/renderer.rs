@@ -299,7 +299,25 @@ impl GfxBackend for VulkanRenderer {
         // O clear acontece no render pass dentro de draw/end_frame nesta implementação
     }
 
-    fn draw(&mut self, gpu_mesh: &GpuMesh, model: Mat4, camera: &Camera) -> Result<(), String> {
+    fn upload_texture(
+        &mut self,
+        data: &crate::graphics::TextureData,
+    ) -> Result<crate::graphics::GpuTexture, String> {
+        let _ = data;
+        Ok(crate::graphics::GpuTexture {
+            gpu_id: 0,
+            width: 1,
+            height: 1,
+        })
+    }
+
+    fn draw(
+        &mut self,
+        gpu_mesh: &GpuMesh,
+        model: Mat4,
+        camera: &Camera,
+        _material: crate::graphics::DrawMaterial,
+    ) -> Result<(), String> {
         let mesh = self
             .meshes
             .get(&gpu_mesh.gpu_id)
@@ -647,7 +665,8 @@ unsafe fn create_pipeline(
     let attrs = [
         vk::VertexInputAttributeDescription::default().location(0).binding(0).format(vk::Format::R32G32B32_SFLOAT).offset(0),
         vk::VertexInputAttributeDescription::default().location(1).binding(0).format(vk::Format::R32G32B32_SFLOAT).offset(12),
-        vk::VertexInputAttributeDescription::default().location(2).binding(0).format(vk::Format::R32G32B32_SFLOAT).offset(24),
+        vk::VertexInputAttributeDescription::default().location(2).binding(0).format(vk::Format::R32G32_SFLOAT).offset(24),
+        vk::VertexInputAttributeDescription::default().location(3).binding(0).format(vk::Format::R32G32B32_SFLOAT).offset(32),
     ];
 
     let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()

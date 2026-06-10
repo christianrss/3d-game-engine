@@ -40,6 +40,8 @@
 //! set GFX_BACKEND=directx
 //! ```
 
+pub mod assets;
+pub mod audio;
 pub mod engine;
 pub mod game;
 pub mod graphics;

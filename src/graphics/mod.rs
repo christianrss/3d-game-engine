@@ -5,6 +5,7 @@
 
 mod backend;
 mod camera;
+pub mod mesh_factory;
 mod primitives;
 pub mod renderer;
 mod shaders;
@@ -20,5 +21,5 @@ pub mod directx;
 pub use backend::{BackendKind, GfxBackend};
 pub use camera::Camera;
 pub use primitives::*;
-pub use renderer::{GfxRenderer, MeshCache};
-pub use types::{Color, GpuMesh, Mesh, Vertex};
+pub use renderer::{GfxRenderer, HudState, MeshCache};
+pub use types::{Color, DrawMaterial, GpuMesh, GpuTexture, Mesh, ParticleDraw, TextureData, Vertex};
