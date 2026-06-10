@@ -4,6 +4,19 @@ use crate::graphics::{Color, Mesh, TextureData, Vertex};
 use image::GenericImage;
 use std::path::Path;
 
+/// Distância do pivô do modelo (origem) até a base da malha (eixo Y).
+pub fn mesh_foot_offset(mesh: &Mesh) -> f32 {
+    let mut min_y = f32::MAX;
+    for v in &mesh.vertices {
+        min_y = min_y.min(v.position[1]);
+    }
+    if min_y > f32::MAX * 0.5 {
+        0.0
+    } else {
+        (-min_y).max(0.0)
+    }
+}
+
 /// Modelo 3D carregado da CPU.
 #[derive(Debug, Clone)]
 pub struct ModelAsset {

@@ -2,7 +2,7 @@
 
 
 
-use crate::assets::{AssetLibrary, GpuAssetCache};
+use crate::assets::GpuAssetCache;
 
 use crate::audio::AudioEngine;
 
@@ -272,7 +272,8 @@ impl GameApp {
 
 
 
-        let library = AssetLibrary::load().expect("Falha ao carregar assets CC0");
+        let library = crate::games::desert_shooter::load_assets()
+            .expect("Falha ao carregar assets do Desert Shooter");
 
         self.viewmodel = ViewModelAnimator::with_muzzle(library.viewmodel_muzzle);
 
@@ -703,17 +704,12 @@ impl GameApp {
             let night_factor = (1.0 - lighting.sun_dir[1].clamp(0.0, 1.0)).powf(0.65);
 
             ew.renderer.set_day_night(DayNightGpu {
-
                 sun_dir: lighting.sun_dir,
-
                 horizon: lighting.horizon,
-
                 zenith: lighting.zenith,
-
                 fog_color: lighting.fog_color,
-
                 night_factor,
-
+                fog_intensity: 0.4,
             });
 
         }

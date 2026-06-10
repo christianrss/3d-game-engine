@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "profile": {
+    "xp": 0,
+    "level": 1,
+    "skill_points": 0,
+    "total_throws": 0,
+    "total_hits": 0,
+    "best_combo": 0
+  },
+  "skills": {
+    "unlocked": []
+  },
+  "unlocks": {
+    "stones": [],
+    "maps": [],
+    "gloves": [],
+    "skins": []
+  },
+  "best_scores": {
+    "total": 0,
+    "session": 0,
+    "combo": 0,
+    "max_combo": 0,
+    "hits": 0,
+    "misses": 0,
+    "ricochet_bonus": 0,
+    "time_bonus": 0
+  },
+  "daily": {
+    "seed": 20260610,
+    "best_score": 0,
+    "attempts_today": 0,
+    "completed": false
+  }
+}

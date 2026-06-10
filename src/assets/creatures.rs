@@ -23,23 +23,19 @@ pub fn generate_sheep() -> Mesh {
 }
 
 pub fn generate_dirt_block() -> Mesh {
-    tinted_cube(Color::rgb(0.42, 0.28, 0.14))
+    crate::graphics::rounded_box(1.0, Color::rgb(0.42, 0.28, 0.14), 3)
 }
 
 pub fn generate_stone_block() -> Mesh {
-    tinted_cube(Color::rgb(0.52, 0.5, 0.48))
-}
-
-fn tinted_cube(color: Color) -> Mesh {
-    crate::graphics::cube(color)
+    crate::assets::procedural::generate_boulder(17, 0.52, 2)
 }
 
 pub fn generate_stone_wall() -> Mesh {
-    tinted_cube(Color::rgb(0.48, 0.46, 0.44))
+    crate::graphics::rounded_box(1.0, Color::rgb(0.48, 0.46, 0.44), 2)
 }
 
 pub fn generate_wood_wall() -> Mesh {
-    tinted_cube(Color::rgb(0.42, 0.3, 0.16))
+    crate::graphics::rounded_box(1.0, Color::rgb(0.42, 0.3, 0.16), 2)
 }
 
 pub fn generate_fence_post() -> Mesh {

@@ -1,0 +1,54 @@
+{
+  "name": "Deserto Demo",
+  "entities": [
+    {
+      "name": "Terreno",
+      "kind": "terrain",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation_y": 0.0,
+      "scale": 1.0,
+      "enabled": true
+    },
+    {
+      "name": "Sol",
+      "kind": "light",
+      "position": [
+        0.0,
+        80.0,
+        0.0
+      ],
+      "rotation_y": 0.0,
+      "scale": 1.0,
+      "enabled": true
+    },
+    {
+      "name": "Alvo Principal",
+      "kind": "target",
+      "position": [
+        8.0,
+        0.0,
+        -12.0
+      ],
+      "rotation_y": 0.0,
+      "scale": 1.0,
+      "script": "assets/scripts/example.lua",
+      "enabled": true
+    },
+    {
+      "name": "Rocha Editor",
+      "kind": "cube",
+      "position": [
+        -5.0,
+        1.0,
+        -8.0
+      ],
+      "rotation_y": 0.4,
+      "scale": 1.2,
+      "enabled": true
+    }
+  ]
+}

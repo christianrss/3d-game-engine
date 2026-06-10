@@ -42,14 +42,22 @@
 
 pub mod assets;
 pub mod audio;
+pub mod core;
+pub mod editor;
 pub mod engine;
 pub mod game;
+pub mod games;
 pub mod graphics;
 pub mod math;
+pub mod scripting;
 
 pub mod prelude {
+    pub use crate::core::{EcsWorld, Entity, GamePlugin};
+    pub use crate::editor::EngineStudio;
     pub use crate::engine::EngineApp;
+    pub use crate::scripting::LuaRuntime;
     pub use crate::game::SceneBuilder;
+    pub use crate::games::{DesertShooterPlugin, Rock3DPlugin};
     pub use crate::graphics::{BackendKind, Camera, Color, GfxRenderer, Vertex};
     pub use crate::math::{ray_sphere, Vec3};
 }

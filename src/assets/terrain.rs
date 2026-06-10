@@ -32,6 +32,14 @@ pub fn sample_desert_height(wx: f32, wz: f32) -> f32 {
     height_world(wx, wz)
 }
 
+/// Escala de altura da pedreira (Rock 3D) — deve coincidir com `quarry_terrain_mesh`.
+pub const QUARRY_HEIGHT_SCALE: f32 = TERRAIN_VISUAL_SCALE * 0.45;
+
+/// Altura do terreno da pedreira (mapa Rock 3D).
+pub fn sample_quarry_height(wx: f32, wz: f32) -> f32 {
+    height_at_raw(perlin(), wx, wz) * (QUARRY_HEIGHT_SCALE / HEIGHT_SCALE)
+}
+
 /// Gera terreno ondulado estilo dunas com coordenadas UV para tiling de textura.
 pub fn generate_desert_terrain(
     grid: u32,

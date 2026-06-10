@@ -361,9 +361,19 @@ impl GfxRenderer {
     }
 
     pub fn draw_viewmodel(&mut self, camera: &Camera, gun_mesh: &GpuMesh, local: Mat4) {
+        self.draw_viewmodel_mat(camera, gun_mesh, local, DrawMaterial::metal());
+    }
+
+    pub fn draw_viewmodel_mat(
+        &mut self,
+        camera: &Camera,
+        mesh: &GpuMesh,
+        local: Mat4,
+        material: DrawMaterial,
+    ) {
         match self {
             #[cfg(feature = "opengl")]
-            GfxRenderer::OpenGL(r) => r.draw_viewmodel(camera, gun_mesh, local),
+            GfxRenderer::OpenGL(r) => r.draw_viewmodel_mat(camera, mesh, local, material),
             _ => {}
         }
     }
@@ -398,6 +408,21 @@ impl GfxRenderer {
             #[cfg(feature = "opengl")]
             GfxRenderer::OpenGL(r) => r.draw_line_strip(camera, points, color),
             _ => {}
+        }
+    }
+
+    #[cfg(feature = "opengl")]
+    pub fn create_glow_context(&self) -> std::sync::Arc<glow::Context> {
+        match self {
+            GfxRenderer::OpenGL(r) => r.create_glow_context(),
+            #[cfg(feature = "vulkan")]
+            GfxRenderer::Vulkan(_) => {
+                panic!("egui_glow requer OpenGL; use GFX_BACKEND=opengl no Engine Studio")
+            }
+            #[cfg(all(feature = "directx", target_os = "windows"))]
+            GfxRenderer::DirectX11(_) => {
+                panic!("egui_glow requer OpenGL; use GFX_BACKEND=opengl no Engine Studio")
+            }
         }
     }
 
@@ -461,6 +486,25 @@ pub struct HudState {
     pub trade_selection: usize,
     pub chunks_loaded: u32,
     pub net_label: String,
+    /// HUD Rock 3D — barras animadas
+    pub rock_hud: bool,
+    pub force_bar: f32,
+    pub wind_strength: f32,
+    pub rock_speed: f32,
+    pub combo_pulse: f32,
+    pub charge_pulse: f32,
+    pub cinematic_active: bool,
+    /// Textos HUD (NDC -1..1, canto inferior esquerdo do glyph).
+    pub hud_texts: Vec<HudText>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HudText {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub size: f32,
+    pub color: [f32; 4],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -470,6 +514,8 @@ pub struct DayNightGpu {
     pub zenith: [f32; 3],
     pub fog_color: [f32; 3],
     pub night_factor: f32,
+    /// Multiplicador de névoa (clima / mapa).
+    pub fog_intensity: f32,
 }
 
 impl Default for DayNightGpu {
@@ -480,6 +526,7 @@ impl Default for DayNightGpu {
             zenith: [0.22, 0.48, 0.82],
             fog_color: [0.92, 0.72, 0.48],
             night_factor: 0.0,
+            fog_intensity: 1.0,
         }
     }
 }

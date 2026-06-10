@@ -6,9 +6,11 @@
 mod backend;
 mod camera;
 pub mod mesh_factory;
+pub mod procedural_textures;
 mod primitives;
 pub mod renderer;
 mod shaders;
+mod text;
 mod types;
 
 #[cfg(feature = "opengl")]
@@ -21,5 +23,6 @@ pub mod directx;
 pub use backend::{BackendKind, GfxBackend};
 pub use camera::Camera;
 pub use primitives::*;
-pub use renderer::{DayNightGpu, GfxRenderer, HudState, MeshCache};
+pub use renderer::{DayNightGpu, GfxRenderer, HudState, HudText, MeshCache};
+pub use text::{build_font_atlas, TextLayout};
 pub use types::{Color, DrawMaterial, GpuMesh, GpuTexture, Mesh, ParticleDraw, TextureData, Vertex};

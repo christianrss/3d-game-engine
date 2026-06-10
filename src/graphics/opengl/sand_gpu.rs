@@ -46,13 +46,16 @@ void main() {
 
 const SAND_RENDER_FRAG: &str = r#"#version 330 core
 in float vAlpha;
+uniform float uTime;
 out vec4 FragColor;
 void main() {
     vec2 c = gl_PointCoord - vec2(0.5);
     float d = dot(c, c);
     if (d > 0.25) discard;
-    float soft = 1.0 - smoothstep(0.06, 0.25, d);
-    FragColor = vec4(0.92, 0.78, 0.52, soft * vAlpha * 0.8);
+    float soft = 1.0 - smoothstep(0.04, 0.25, d);
+    float sparkle = sin(uTime * 8.0 + c.x * 40.0) * 0.5 + 0.5;
+    vec3 sand = mix(vec3(0.88, 0.72, 0.48), vec3(0.98, 0.86, 0.62), sparkle * 0.35);
+    FragColor = vec4(sand, soft * vAlpha * 0.85);
 }
 "#;
 
@@ -209,7 +212,7 @@ impl GpuSandField {
         }
     }
 
-    pub fn draw(&self, camera: &Camera) {
+    pub fn draw(&self, camera: &Camera, time: f32) {
         let buf = if self.ping_a {
             self.buf_b
         } else {
@@ -222,6 +225,7 @@ impl GpuSandField {
             gl::DepthMask(gl::FALSE);
             gl::UseProgram(self.render_program);
             set_mat4(self.render_program, "uMVP", vp);
+            set_float(self.render_program, "uTime", time);
             bind_grain_vao(self.vao, buf);
             gl::DrawArrays(gl::POINTS, 0, MAX_GRAINS as i32);
             gl::BindVertexArray(0);

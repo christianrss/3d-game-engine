@@ -192,6 +192,9 @@ pub struct GpuMesh {
 
     pub gpu_id: u64,
 
+    /// Albedo embutido do glTF (fotogrametria), quando disponível.
+    pub albedo_tex: Option<u64>,
+
 }
 
 

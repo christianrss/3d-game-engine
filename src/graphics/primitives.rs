@@ -20,6 +20,65 @@ pub fn plane(size: f32, color: Color) -> Mesh {
     Mesh { vertices, indices }
 }
 
+/// Caixa com arestas suavizadas — menos aspecto "bloco Minecraft".
+pub fn rounded_box(size: f32, color: Color, subdiv: u32) -> Mesh {
+    let half = size * 0.5;
+    let roundness = 0.24;
+    let steps = subdiv.max(2);
+
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    for face in 0..6usize {
+        let (axis, sign, u_axis, v_axis): (usize, f32, usize, usize) = match face {
+            0 => (2, -1.0, 0, 1),
+            1 => (2, 1.0, 0, 1),
+            2 => (0, -1.0, 2, 1),
+            3 => (0, 1.0, 2, 1),
+            4 => (1, 1.0, 0, 2),
+            _ => (1, -1.0, 0, 2),
+        };
+
+        let base_idx = vertices.len() as u32;
+
+        for j in 0..=steps {
+            for i in 0..=steps {
+                let fu = i as f32 / steps as f32;
+                let fv = j as f32 / steps as f32;
+                let u = (fu - 0.5) * 2.0;
+                let v = (fv - 0.5) * 2.0;
+
+                let mut pos = [0.0f32; 3];
+                pos[axis] = sign * half;
+                pos[u_axis] = u * half;
+                pos[v_axis] = v * half;
+
+                let corner = Vec3::from_array(pos).normalize_or_zero();
+                let blend = (u * u + v * v).min(1.0);
+                let p = Vec3::from_array(pos) * (1.0 - blend * roundness)
+                    + corner * half * blend * roundness;
+
+                let normal = (p + corner * half * 0.18).normalize_or_zero().to_array();
+                vertices.push(Vertex::new(p.to_array(), normal, [fu, fv], color));
+            }
+        }
+
+        for j in 0..steps {
+            for i in 0..steps {
+                let a = base_idx + j * (steps + 1) + i;
+                let b = a + steps + 1;
+                if sign > 0.0 || axis == 1 {
+                    indices.extend_from_slice(&[a, a + 1, b, a + 1, b + 1, b]);
+                } else {
+                    indices.extend_from_slice(&[a, b, a + 1, a + 1, b, b + 1]);
+                }
+            }
+        }
+    }
+
+    Mesh { vertices, indices }
+}
+
 /// Cubo unitário centrado na origem.
 pub fn cube(color: Color) -> Mesh {
     let p = [
@@ -56,7 +115,7 @@ pub fn cube(color: Color) -> Mesh {
     Mesh { vertices, indices }
 }
 
-/// Esfera UV (aproximação por triângulos).
+/// Esfera UV com mais segmentos por padrão.
 pub fn sphere(radius: f32, color: Color, segments: u32, rings: u32) -> Mesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -89,7 +148,7 @@ pub fn sphere(radius: f32, color: Color, segments: u32, rings: u32) -> Mesh {
     Mesh { vertices, indices }
 }
 
-/// Cilindro vertical (viewmodel, pedestais).
+/// Cilindro vertical com topo/base arredondados.
 pub fn cylinder(radius: f32, height: f32, color: Color, segments: u32) -> Mesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();

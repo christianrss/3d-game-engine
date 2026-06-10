@@ -2,23 +2,29 @@
 
 use crate::graphics::backend::GfxBackend;
 use crate::graphics::opengl::context::GlContext;
+use glutin::display::{GetGlDisplay, GlDisplay};
 use crate::graphics::opengl::sand_gpu::GpuSandField;
 use crate::graphics::renderer::{DayNightGpu, HudState};
 use crate::graphics::shaders::{
-    FRAGMENT_GLSL_GL33, LIGHT_DIRECTION, PARTICLE_FRAGMENT_GLSL_GL33, PARTICLE_VERTEX_GLSL_GL33,
+    FRAGMENT_GLSL_GL33, HUD_TEXT_FRAGMENT_GLSL, HUD_TEXT_VERTEX_GLSL, HUD_UI_FRAGMENT_GLSL,
+    HUD_UI_VERTEX_GLSL, LIGHT_DIRECTION, PARTICLE_FRAGMENT_GLSL_GL33, PARTICLE_VERTEX_GLSL_GL33,
     POST_FRAGMENT_GLSL_GL33, POST_VERTEX_GLSL_GL33, SHADOW_FRAGMENT_GLSL_GL33,
     SHADOW_VERTEX_GLSL_GL33, SKY_FRAGMENT_GLSL_GL33, SKY_VERTEX_GLSL_GL33, VERTEX_GLSL_GL33,
     WATER_FRAGMENT_GLSL_GL33, WATER_VERTEX_GLSL_GL33,
 };
+use crate::graphics::text::{build_font_atlas, TextLayout};
 use crate::graphics::ParticleDraw;
 use crate::graphics::{Camera, Color, DrawMaterial, GpuMesh, GpuTexture, Mesh, TextureData};
 use crate::math::{Mat4, Vec3};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::ptr;
+use std::sync::Arc;
 
-const SHADOW_SIZE: i32 = 2048;
+const SHADOW_SIZE: i32 = 4096;
 const REFLECT_SIZE: i32 = 512;
+const MSAA_SAMPLES: i32 = 4;
+const ENV_MAP_SIZE: i32 = 128;
 
 #[derive(Debug)]
 pub enum OpenGLError {
@@ -44,9 +50,18 @@ struct GlMesh {
 }
 
 struct Framebuffers {
+    scene_fbo_ms: u32,
+    scene_color_ms: u32,
+    scene_velocity_ms: u32,
+    scene_depth_ms: u32,
     scene_fbo: u32,
     scene_color: u32,
+    scene_velocity: u32,
     scene_depth: u32,
+    history_fbo: u32,
+    history_color: u32,
+    env_cubemap: u32,
+    env_fbo: u32,
     shadow_fbo: u32,
     shadow_depth: u32,
     reflect_fbo: u32,
@@ -64,9 +79,14 @@ pub struct OpenGLRenderer {
     particle_vao: u32,
     particle_vbo: u32,
     hud_shader: u32,
+    hud_ui_shader: u32,
+    hud_text_shader: u32,
+    font_tex: u64,
     hud_vao: u32,
     hud_panel_vao: u32,
     hud_panel_vbo: u32,
+    hud_glyph_vao: u32,
+    hud_glyph_vbo: u32,
     line_shader: u32,
     line_vao: u32,
     line_vbo: u32,
@@ -84,9 +104,12 @@ pub struct OpenGLRenderer {
     rock_albedo: u64,
     rock_normal: u64,
     rock_rough: u64,
+    detail_normal: u64,
     scene_time: f32,
     day_night: DayNightGpu,
     reflect_view_proj: Mat4,
+    prev_view_proj: Mat4,
+    last_view_proj: Mat4,
     sand: Option<GpuSandField>,
     light_space: Mat4,
     next_id: u64,
@@ -94,6 +117,7 @@ pub struct OpenGLRenderer {
     width: u32,
     height: u32,
     in_scene: bool,
+    first_frame: bool,
 }
 
 impl OpenGLRenderer {
@@ -109,8 +133,11 @@ impl OpenGLRenderer {
             compile_shader_program(PARTICLE_VERTEX_GLSL_GL33, PARTICLE_FRAGMENT_GLSL_GL33)?;
         let (particle_vao, particle_vbo) = create_particle_vao();
         let hud_shader = compile_hud_shader()?;
+        let hud_ui_shader = compile_shader_program(HUD_UI_VERTEX_GLSL, HUD_UI_FRAGMENT_GLSL)?;
+        let hud_text_shader = compile_shader_program(HUD_TEXT_VERTEX_GLSL, HUD_TEXT_FRAGMENT_GLSL)?;
         let hud_vao = create_hud_vao();
         let (hud_panel_vao, hud_panel_vbo) = create_hud_panel_vao();
+        let (hud_glyph_vao, hud_glyph_vbo) = create_hud_glyph_vao();
         let line_shader = compile_line_shader()?;
         let (line_vao, line_vbo) = create_line_vao();
         let water_shader =
@@ -128,9 +155,14 @@ impl OpenGLRenderer {
             particle_vao,
             particle_vbo,
             hud_shader,
+            hud_ui_shader,
+            hud_text_shader,
+            font_tex: 0,
             hud_vao,
             hud_panel_vao,
             hud_panel_vbo,
+            hud_glyph_vao,
+            hud_glyph_vbo,
             line_shader,
             line_vao,
             line_vbo,
@@ -148,9 +180,12 @@ impl OpenGLRenderer {
             rock_albedo: 0,
             rock_normal: 0,
             rock_rough: 0,
+            detail_normal: 0,
             scene_time: 0.0,
             day_night: DayNightGpu::default(),
             reflect_view_proj: Mat4::IDENTITY,
+            prev_view_proj: Mat4::IDENTITY,
+            last_view_proj: Mat4::IDENTITY,
             sand: GpuSandField::new().ok(),
             light_space: Mat4::IDENTITY,
             next_id: 1,
@@ -158,8 +193,16 @@ impl OpenGLRenderer {
             width: width.max(1),
             height: height.max(1),
             in_scene: false,
+            first_frame: true,
         };
 
+        let detail = crate::graphics::procedural_textures::generate_noise_normal(256, 7);
+        if let Ok(tex) = r.upload_texture(&detail) {
+            r.detail_normal = tex.gpu_id;
+        }
+        if let Ok(tex) = r.upload_texture(&build_font_atlas()) {
+            r.font_tex = tex.gpu_id;
+        }
         r.fb = Some(r.create_framebuffers()?);
 
         unsafe {
@@ -206,9 +249,20 @@ impl OpenGLRenderer {
     }
 
     fn create_framebuffers(&self) -> Result<Framebuffers, OpenGLError> {
+        let w = self.width as i32;
+        let h = self.height as i32;
+        let mut scene_fbo_ms = 0u32;
+        let mut scene_color_ms = 0u32;
+        let mut scene_velocity_ms = 0u32;
+        let mut scene_depth_ms = 0u32;
         let mut scene_fbo = 0u32;
         let mut scene_color = 0u32;
+        let mut scene_velocity = 0u32;
         let mut scene_depth = 0u32;
+        let mut history_fbo = 0u32;
+        let mut history_color = 0u32;
+        let mut env_cubemap = 0u32;
+        let mut env_fbo = 0u32;
         let mut shadow_fbo = 0u32;
         let mut shadow_depth = 0u32;
         let mut reflect_fbo = 0u32;
@@ -216,55 +270,130 @@ impl OpenGLRenderer {
         let mut reflect_depth = 0u32;
 
         unsafe {
-            gl::GenFramebuffers(1, &mut scene_fbo);
-            gl::BindFramebuffer(gl::FRAMEBUFFER, scene_fbo);
-            gl::GenTextures(1, &mut scene_color);
-            gl::BindTexture(gl::TEXTURE_2D, scene_color);
-            gl::TexImage2D(
-                gl::TEXTURE_2D,
-                0,
-                gl::RGBA16F as i32,
-                self.width as i32,
-                self.height as i32,
-                0,
-                gl::RGBA,
-                gl::FLOAT,
-                ptr::null(),
+            // ── MSAA render target (cena) ──
+            gl::GenFramebuffers(1, &mut scene_fbo_ms);
+            gl::BindFramebuffer(gl::FRAMEBUFFER, scene_fbo_ms);
+
+            gl::GenRenderbuffers(1, &mut scene_color_ms);
+            gl::BindRenderbuffer(gl::RENDERBUFFER, scene_color_ms);
+            gl::RenderbufferStorageMultisample(
+                gl::RENDERBUFFER,
+                MSAA_SAMPLES,
+                gl::RGBA16F,
+                w,
+                h,
             );
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
-            gl::FramebufferTexture2D(
+            gl::FramebufferRenderbuffer(
                 gl::FRAMEBUFFER,
                 gl::COLOR_ATTACHMENT0,
-                gl::TEXTURE_2D,
-                scene_color,
-                0,
+                gl::RENDERBUFFER,
+                scene_color_ms,
             );
+
+            gl::GenRenderbuffers(1, &mut scene_velocity_ms);
+            gl::BindRenderbuffer(gl::RENDERBUFFER, scene_velocity_ms);
+            gl::RenderbufferStorageMultisample(
+                gl::RENDERBUFFER,
+                MSAA_SAMPLES,
+                gl::RG16F,
+                w,
+                h,
+            );
+            gl::FramebufferRenderbuffer(
+                gl::FRAMEBUFFER,
+                gl::COLOR_ATTACHMENT1,
+                gl::RENDERBUFFER,
+                scene_velocity_ms,
+            );
+
+            gl::GenRenderbuffers(1, &mut scene_depth_ms);
+            gl::BindRenderbuffer(gl::RENDERBUFFER, scene_depth_ms);
+            gl::RenderbufferStorageMultisample(
+                gl::RENDERBUFFER,
+                MSAA_SAMPLES,
+                gl::DEPTH_COMPONENT24,
+                w,
+                h,
+            );
+            gl::FramebufferRenderbuffer(
+                gl::FRAMEBUFFER,
+                gl::DEPTH_ATTACHMENT,
+                gl::RENDERBUFFER,
+                scene_depth_ms,
+            );
+
+            let draw_bufs = [gl::COLOR_ATTACHMENT0, gl::COLOR_ATTACHMENT1];
+            gl::DrawBuffers(2, draw_bufs.as_ptr());
+
+            if gl::CheckFramebufferStatus(gl::FRAMEBUFFER) != gl::FRAMEBUFFER_COMPLETE {
+                return Err(OpenGLError::Gl("Scene MSAA FBO incompleto".into()));
+            }
+
+            // ── Resolve (single-sample) ──
+            gl::GenFramebuffers(1, &mut scene_fbo);
+            gl::BindFramebuffer(gl::FRAMEBUFFER, scene_fbo);
+
+            gl::GenTextures(1, &mut scene_color);
+            gl::BindTexture(gl::TEXTURE_2D, scene_color);
+            gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RGBA16F as i32, w, h, 0, gl::RGBA, gl::FLOAT, ptr::null());
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::FramebufferTexture2D(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, scene_color, 0);
+
+            gl::GenTextures(1, &mut scene_velocity);
+            gl::BindTexture(gl::TEXTURE_2D, scene_velocity);
+            gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RG16F as i32, w, h, 0, gl::RG, gl::FLOAT, ptr::null());
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::FramebufferTexture2D(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT1, gl::TEXTURE_2D, scene_velocity, 0);
 
             gl::GenTextures(1, &mut scene_depth);
             gl::BindTexture(gl::TEXTURE_2D, scene_depth);
-            gl::TexImage2D(
-                gl::TEXTURE_2D,
-                0,
-                gl::DEPTH_COMPONENT24 as i32,
-                self.width as i32,
-                self.height as i32,
-                0,
-                gl::DEPTH_COMPONENT,
-                gl::FLOAT,
-                ptr::null(),
-            );
-            gl::FramebufferTexture2D(
-                gl::FRAMEBUFFER,
-                gl::DEPTH_ATTACHMENT,
-                gl::TEXTURE_2D,
-                scene_depth,
-                0,
-            );
+            gl::TexImage2D(gl::TEXTURE_2D, 0, gl::DEPTH_COMPONENT24 as i32, w, h, 0, gl::DEPTH_COMPONENT, gl::FLOAT, ptr::null());
+            gl::FramebufferTexture2D(gl::FRAMEBUFFER, gl::DEPTH_ATTACHMENT, gl::TEXTURE_2D, scene_depth, 0);
 
+            gl::DrawBuffers(2, draw_bufs.as_ptr());
             if gl::CheckFramebufferStatus(gl::FRAMEBUFFER) != gl::FRAMEBUFFER_COMPLETE {
-                return Err(OpenGLError::Gl("Scene FBO incompleto".into()));
+                return Err(OpenGLError::Gl("Scene resolve FBO incompleto".into()));
             }
+
+            // ── TAA history ──
+            gl::GenFramebuffers(1, &mut history_fbo);
+            gl::BindFramebuffer(gl::FRAMEBUFFER, history_fbo);
+            gl::GenTextures(1, &mut history_color);
+            gl::BindTexture(gl::TEXTURE_2D, history_color);
+            gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RGBA16F as i32, w, h, 0, gl::RGBA, gl::FLOAT, ptr::null());
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::FramebufferTexture2D(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, history_color, 0);
+            if gl::CheckFramebufferStatus(gl::FRAMEBUFFER) != gl::FRAMEBUFFER_COMPLETE {
+                return Err(OpenGLError::Gl("History FBO incompleto".into()));
+            }
+
+            // ── IBL cubemap ──
+            gl::GenTextures(1, &mut env_cubemap);
+            gl::BindTexture(gl::TEXTURE_CUBE_MAP, env_cubemap);
+            for face in 0..6 {
+                gl::TexImage2D(
+                    gl::TEXTURE_CUBE_MAP_POSITIVE_X + face,
+                    0,
+                    gl::RGB16F as i32,
+                    ENV_MAP_SIZE,
+                    ENV_MAP_SIZE,
+                    0,
+                    gl::RGB,
+                    gl::FLOAT,
+                    ptr::null(),
+                );
+            }
+            gl::TexParameteri(gl::TEXTURE_CUBE_MAP, gl::TEXTURE_MIN_FILTER, gl::LINEAR_MIPMAP_LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_CUBE_MAP, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_CUBE_MAP, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(gl::TEXTURE_CUBE_MAP, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(gl::TEXTURE_CUBE_MAP, gl::TEXTURE_WRAP_R, gl::CLAMP_TO_EDGE as i32);
+
+            gl::GenFramebuffers(1, &mut env_fbo);
+            gl::BindFramebuffer(gl::FRAMEBUFFER, env_fbo);
 
             gl::GenFramebuffers(1, &mut shadow_fbo);
             gl::BindFramebuffer(gl::FRAMEBUFFER, shadow_fbo);
@@ -353,15 +482,69 @@ impl OpenGLRenderer {
         }
 
         Ok(Framebuffers {
+            scene_fbo_ms,
+            scene_color_ms,
+            scene_velocity_ms,
+            scene_depth_ms,
             scene_fbo,
             scene_color,
+            scene_velocity,
             scene_depth,
+            history_fbo,
+            history_color,
+            env_cubemap,
+            env_fbo,
             shadow_fbo,
             shadow_depth,
             reflect_fbo,
             reflect_color,
             reflect_depth,
         })
+    }
+
+    fn capture_env_cubemap(&self) {
+        let Some(fb) = &self.fb else { return };
+        let size = ENV_MAP_SIZE;
+        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 50.0);
+        let center = Vec3::ZERO;
+        let faces: [(Vec3, Vec3); 6] = [
+            (Vec3::X, Vec3::NEG_Y),
+            (Vec3::NEG_X, Vec3::NEG_Y),
+            (Vec3::Y, Vec3::Z),
+            (Vec3::NEG_Y, Vec3::NEG_Z),
+            (Vec3::Z, Vec3::NEG_Y),
+            (Vec3::NEG_Z, Vec3::NEG_Y),
+        ];
+
+        unsafe {
+            gl::Viewport(0, 0, size, size);
+            gl::BindFramebuffer(gl::FRAMEBUFFER, fb.env_fbo);
+            gl::UseProgram(self.sky_shader);
+
+            for (i, (dir, up)) in faces.iter().enumerate() {
+                let view = Mat4::look_at_rh(center, center + *dir, *up);
+                let vp = proj * view;
+                gl::FramebufferTexture2D(
+                    gl::FRAMEBUFFER,
+                    gl::COLOR_ATTACHMENT0,
+                    gl::TEXTURE_CUBE_MAP_POSITIVE_X + i as u32,
+                    fb.env_cubemap,
+                    0,
+                );
+                gl::ClearColor(0.0, 0.0, 0.0, 1.0);
+                gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+                set_mat4(self.sky_shader, "uViewProj", vp);
+                set_vec3(self.sky_shader, "uHorizon", self.day_night.horizon);
+                set_vec3(self.sky_shader, "uZenith", self.day_night.zenith);
+                set_vec3(self.sky_shader, "uSunDir", self.day_night.sun_dir);
+                set_float(self.sky_shader, "uNightFactor", self.day_night.night_factor);
+                gl::BindVertexArray(self.sky_vao);
+                gl::DrawElements(gl::TRIANGLES, self.sky_index_count as i32, gl::UNSIGNED_INT, ptr::null());
+            }
+            gl::BindTexture(gl::TEXTURE_CUBE_MAP, fb.env_cubemap);
+            gl::GenerateMipmap(gl::TEXTURE_CUBE_MAP);
+            gl::BindVertexArray(0);
+        }
     }
 
     pub fn begin_planar_reflection(&mut self, camera: &Camera, plane_y: f32) -> Camera {
@@ -385,7 +568,7 @@ impl OpenGLRenderer {
     pub fn end_planar_reflection(&mut self) {
         if let Some(fb) = &self.fb {
             unsafe {
-                gl::BindFramebuffer(gl::FRAMEBUFFER, fb.scene_fbo);
+                gl::BindFramebuffer(gl::FRAMEBUFFER, fb.scene_fbo_ms);
                 gl::Viewport(0, 0, self.width as i32, self.height as i32);
             }
         }
@@ -405,7 +588,18 @@ impl OpenGLRenderer {
 
     pub fn sand_draw(&self, camera: &Camera) {
         if let Some(sand) = &self.sand {
-            sand.draw(camera);
+            sand.draw(camera, self.scene_time);
+        }
+    }
+
+    /// Contexto glow compartilhado com egui_glow (mesmo loader OpenGL).
+    pub fn create_glow_context(&self) -> Arc<glow::Context> {
+        let gl_display = self.gl_ctx.gl_config.display();
+        unsafe {
+            Arc::new(glow::Context::from_loader_function(move |symbol| {
+                let name = CString::new(symbol).expect("CString");
+                gl_display.get_proc_address(name.as_c_str()) as *const _
+            }))
         }
     }
 
@@ -459,6 +653,10 @@ impl OpenGLRenderer {
             }
 
             draw_hud_panels(self, hud);
+            if hud.rock_hud {
+                draw_hud_rock_aaa(self, hud);
+            }
+            draw_hud_text_labels(self, hud);
 
             gl::BindVertexArray(0);
             gl::Enable(gl::DEPTH_TEST);
@@ -494,7 +692,17 @@ impl OpenGLRenderer {
     }
 
     pub fn draw_viewmodel(&self, camera: &Camera, gun_mesh: &GpuMesh, local: Mat4) {
-        let gl_mesh = match self.meshes.get(&gun_mesh.gpu_id) {
+        self.draw_viewmodel_mat(camera, gun_mesh, local, DrawMaterial::metal());
+    }
+
+    pub fn draw_viewmodel_mat(
+        &self,
+        camera: &Camera,
+        mesh: &GpuMesh,
+        local: Mat4,
+        material: DrawMaterial,
+    ) {
+        let gl_mesh = match self.meshes.get(&mesh.gpu_id) {
             Some(m) => m,
             None => return,
         };
@@ -504,14 +712,14 @@ impl OpenGLRenderer {
         view.w_axis.z = 0.0;
         view.w_axis.w = 1.0;
         let mvp = camera.projection_matrix() * view * local;
-        self.draw_mesh_internal(
-            gl_mesh,
-            mvp,
-            local,
-            camera,
-            DrawMaterial::metal(),
-            0.0,
-        );
+        unsafe {
+            gl::DepthFunc(gl::ALWAYS);
+            gl::DepthMask(gl::TRUE);
+        }
+        self.draw_mesh_internal(gl_mesh, mesh, mvp, local, camera, material, 0.0);
+        unsafe {
+            gl::DepthFunc(gl::LESS);
+        }
     }
 
     pub fn draw_particles(&self, camera: &Camera, particles: &[ParticleDraw], vm_transform: Mat4) {
@@ -622,39 +830,71 @@ impl OpenGLRenderer {
     fn draw_mesh_internal(
         &self,
         gl_mesh: &GlMesh,
+        gpu_mesh: &GpuMesh,
         mvp: Mat4,
         model: Mat4,
         camera: &Camera,
         material: DrawMaterial,
         fog_density: f32,
     ) {
+        let fog = fog_density * self.day_night.fog_intensity;
         unsafe {
             gl::UseProgram(self.shader);
             set_mat4(self.shader, "uMVP", mvp);
             set_mat4(self.shader, "uModel", model);
             set_mat4(self.shader, "uLightSpaceMatrix", self.light_space);
+            set_mat4(self.shader, "uPrevViewProj", self.prev_view_proj);
             set_vec3(self.shader, "uLightDir", self.day_night.sun_dir);
             set_vec3(self.shader, "uCameraPos", camera.position.to_array());
             set_vec3(self.shader, "uFogColor", self.day_night.fog_color);
-            set_float(self.shader, "uFogDensity", fog_density);
+            set_vec3(self.shader, "uHorizon", self.day_night.horizon);
+            set_vec3(self.shader, "uZenith", self.day_night.zenith);
+            set_float(self.shader, "uNightFactor", self.day_night.night_factor);
+            set_float(self.shader, "uFogDensity", fog);
             set_float(self.shader, "uTime", self.scene_time);
 
             bind_texture(self.fb.as_ref().map(|f| &f.shadow_depth), 4);
             set_int(self.shader, "uShadowMap", 4);
+            if let Some(fb) = &self.fb {
+                gl::ActiveTexture(gl::TEXTURE0 + 5);
+                gl::BindTexture(gl::TEXTURE_CUBE_MAP, fb.env_cubemap);
+                set_int(self.shader, "uEnvMap", 5);
+                set_int(self.shader, "uHasEnvMap", 1);
+            } else {
+                set_int(self.shader, "uHasEnvMap", 0);
+            }
+
+            let prop_albedo = gpu_mesh.albedo_tex.filter(|id| *id > 0);
 
             match material {
                 DrawMaterial::Standard { roughness, metallic } => {
                     set_int(self.shader, "uMatType", 0);
-                    set_int(self.shader, "uUseAlbedo", 0);
-                    set_int(self.shader, "uUseNormalMap", 0);
-                    set_int(self.shader, "uUseRoughMap", 0);
+                    if let Some(tex_id) = prop_albedo {
+                        set_int(self.shader, "uUseAlbedo", 1);
+                        set_int(self.shader, "uUseNormalMap", 1);
+                        set_int(self.shader, "uUseRoughMap", 1);
+                        bind_texture(self.textures.get(&tex_id), 0);
+                        bind_texture(self.textures.get(&self.rock_normal), 1);
+                        bind_texture(self.textures.get(&self.rock_rough), 2);
+                        set_int(self.shader, "uAlbedo", 0);
+                        set_int(self.shader, "uNormalMap", 1);
+                        set_int(self.shader, "uRoughMap", 2);
+                    } else {
+                        set_int(self.shader, "uUseAlbedo", 0);
+                        set_int(self.shader, "uUseNormalMap", 0);
+                        set_int(self.shader, "uUseRoughMap", 0);
+                    }
                     set_int(self.shader, "uUseAOMap", 0);
+                    set_int(self.shader, "uUseDetailNormal", if prop_albedo.is_none() && self.detail_normal > 0 { 1 } else { 0 });
                     set_float(self.shader, "uRoughness", roughness);
                     set_float(self.shader, "uMetallic", metallic);
                     set_float(self.shader, "uTiling", 1.0);
+                    bind_texture(self.textures.get(&self.detail_normal), 6);
+                    set_int(self.shader, "uDetailNormal", 6);
                 }
                 DrawMaterial::Terrain { tiling } => {
                     set_int(self.shader, "uMatType", 1);
+                    set_int(self.shader, "uUseDetailNormal", 0);
                     set_int(self.shader, "uUseAlbedo", 1);
                     set_int(self.shader, "uUseNormalMap", 1);
                     set_int(self.shader, "uUseRoughMap", 1);
@@ -672,20 +912,39 @@ impl OpenGLRenderer {
                     set_int(self.shader, "uAOMap", 3);
                 }
                 DrawMaterial::Rock { tiling } => {
-                    set_int(self.shader, "uMatType", 2);
-                    set_int(self.shader, "uUseAlbedo", 1);
-                    set_int(self.shader, "uUseNormalMap", 1);
-                    set_int(self.shader, "uUseRoughMap", 1);
-                    set_int(self.shader, "uUseAOMap", 0);
-                    set_float(self.shader, "uRoughness", 0.85);
-                    set_float(self.shader, "uMetallic", 0.0);
-                    set_float(self.shader, "uTiling", tiling);
-                    bind_texture(self.textures.get(&self.rock_albedo), 0);
-                    bind_texture(self.textures.get(&self.rock_normal), 1);
-                    bind_texture(self.textures.get(&self.rock_rough), 2);
-                    set_int(self.shader, "uAlbedo", 0);
-                    set_int(self.shader, "uNormalMap", 1);
-                    set_int(self.shader, "uRoughMap", 2);
+                    if let Some(tex_id) = prop_albedo {
+                        set_int(self.shader, "uMatType", 0);
+                        set_int(self.shader, "uUseDetailNormal", 0);
+                        set_int(self.shader, "uUseAlbedo", 1);
+                        set_int(self.shader, "uUseNormalMap", 1);
+                        set_int(self.shader, "uUseRoughMap", 1);
+                        set_int(self.shader, "uUseAOMap", 0);
+                        set_float(self.shader, "uRoughness", 0.88);
+                        set_float(self.shader, "uMetallic", 0.0);
+                        set_float(self.shader, "uTiling", 1.0);
+                        bind_texture(self.textures.get(&tex_id), 0);
+                        bind_texture(self.textures.get(&self.rock_normal), 1);
+                        bind_texture(self.textures.get(&self.rock_rough), 2);
+                        set_int(self.shader, "uAlbedo", 0);
+                        set_int(self.shader, "uNormalMap", 1);
+                        set_int(self.shader, "uRoughMap", 2);
+                    } else {
+                        set_int(self.shader, "uMatType", 2);
+                        set_int(self.shader, "uUseDetailNormal", 0);
+                        set_int(self.shader, "uUseAlbedo", 1);
+                        set_int(self.shader, "uUseNormalMap", 1);
+                        set_int(self.shader, "uUseRoughMap", 1);
+                        set_int(self.shader, "uUseAOMap", 0);
+                        set_float(self.shader, "uRoughness", 0.85);
+                        set_float(self.shader, "uMetallic", 0.0);
+                        set_float(self.shader, "uTiling", tiling);
+                        bind_texture(self.textures.get(&self.rock_albedo), 0);
+                        bind_texture(self.textures.get(&self.rock_normal), 1);
+                        bind_texture(self.textures.get(&self.rock_rough), 2);
+                        set_int(self.shader, "uAlbedo", 0);
+                        set_int(self.shader, "uNormalMap", 1);
+                        set_int(self.shader, "uRoughMap", 2);
+                    }
                 }
                 DrawMaterial::Water => {}
             }
@@ -727,9 +986,18 @@ impl GfxBackend for OpenGLRenderer {
         self.gl_ctx.resize(self.width, self.height);
         if let Some(fb) = self.fb.take() {
             unsafe {
+                gl::DeleteFramebuffers(1, &fb.scene_fbo_ms);
+                gl::DeleteRenderbuffers(1, &fb.scene_color_ms);
+                gl::DeleteRenderbuffers(1, &fb.scene_velocity_ms);
+                gl::DeleteRenderbuffers(1, &fb.scene_depth_ms);
                 gl::DeleteFramebuffers(1, &fb.scene_fbo);
                 gl::DeleteTextures(1, &fb.scene_color);
+                gl::DeleteTextures(1, &fb.scene_velocity);
                 gl::DeleteTextures(1, &fb.scene_depth);
+                gl::DeleteFramebuffers(1, &fb.history_fbo);
+                gl::DeleteTextures(1, &fb.history_color);
+                gl::DeleteFramebuffers(1, &fb.env_fbo);
+                gl::DeleteTextures(1, &fb.env_cubemap);
                 gl::DeleteFramebuffers(1, &fb.shadow_fbo);
                 gl::DeleteTextures(1, &fb.shadow_depth);
                 gl::DeleteFramebuffers(1, &fb.reflect_fbo);
@@ -787,6 +1055,7 @@ impl GfxBackend for OpenGLRenderer {
             vertex_count: mesh.vertices.len() as u32,
             index_count: mesh.indices.len() as u32,
             gpu_id: id,
+            albedo_tex: None,
         })
     }
 
@@ -858,9 +1127,12 @@ impl GfxBackend for OpenGLRenderer {
 
     fn begin_scene_pass(&mut self, clear: Color) -> Result<(), OpenGLError> {
         let fb = self.fb.as_ref().ok_or_else(|| OpenGLError::Gl("FBO".into()))?;
+        self.capture_env_cubemap();
         unsafe {
             gl::Viewport(0, 0, self.width as i32, self.height as i32);
-            gl::BindFramebuffer(gl::FRAMEBUFFER, fb.scene_fbo);
+            gl::BindFramebuffer(gl::FRAMEBUFFER, fb.scene_fbo_ms);
+            let draw_bufs = [gl::COLOR_ATTACHMENT0, gl::COLOR_ATTACHMENT1];
+            gl::DrawBuffers(2, draw_bufs.as_ptr());
             gl::ClearColor(clear.r, clear.g, clear.b, clear.a);
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
         }
@@ -908,40 +1180,74 @@ impl GfxBackend for OpenGLRenderer {
             .ok_or_else(|| OpenGLError::Gl("Mesh GPU não encontrada".into()))?;
         let mvp = camera.view_projection() * model;
         let fog = match material {
-            DrawMaterial::Terrain { .. } => 0.000025,
-            DrawMaterial::Rock { .. } => 0.00004,
-            DrawMaterial::Standard { .. } => 0.00006,
-            DrawMaterial::Water => 0.00003,
+            DrawMaterial::Terrain { .. } => 0.00055,
+            DrawMaterial::Rock { .. } => 0.0007,
+            DrawMaterial::Standard { .. } => 0.0008,
+            DrawMaterial::Water => 0.00045,
         };
-        self.draw_mesh_internal(gl_mesh, mvp, model, camera, material, fog);
+        self.last_view_proj = camera.view_projection();
+        self.draw_mesh_internal(gl_mesh, gpu_mesh, mvp, model, camera, material, fog);
         Ok(())
     }
 
     fn end_scene_pass(&mut self) -> Result<(), OpenGLError> {
         let fb = self.fb.as_ref().ok_or_else(|| OpenGLError::Gl("FBO".into()))?;
+        let w = self.width as i32;
+        let h = self.height as i32;
         unsafe {
+            // MSAA resolve → texturas single-sample
+            gl::BindFramebuffer(gl::READ_FRAMEBUFFER, fb.scene_fbo_ms);
+            gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, fb.scene_fbo);
+            gl::ReadBuffer(gl::COLOR_ATTACHMENT0);
+            gl::DrawBuffer(gl::COLOR_ATTACHMENT0);
+            gl::BlitFramebuffer(0, 0, w, h, 0, 0, w, h, gl::COLOR_BUFFER_BIT, gl::NEAREST);
+            gl::ReadBuffer(gl::COLOR_ATTACHMENT1);
+            gl::DrawBuffer(gl::COLOR_ATTACHMENT1);
+            gl::BlitFramebuffer(0, 0, w, h, 0, 0, w, h, gl::COLOR_BUFFER_BIT, gl::NEAREST);
+            gl::BlitFramebuffer(0, 0, w, h, 0, 0, w, h, gl::DEPTH_BUFFER_BIT, gl::NEAREST);
+
+            // Pós-processo
             gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
-            gl::Viewport(0, 0, self.width as i32, self.height as i32);
+            gl::Viewport(0, 0, w, h);
             gl::Disable(gl::DEPTH_TEST);
             gl::UseProgram(self.post_shader);
+
             gl::ActiveTexture(gl::TEXTURE0);
             gl::BindTexture(gl::TEXTURE_2D, fb.scene_color);
             set_int(self.post_shader, "uScene", 0);
             gl::ActiveTexture(gl::TEXTURE1);
-            gl::BindTexture(gl::TEXTURE_2D, fb.scene_depth);
-            set_int(self.post_shader, "uDepth", 1);
+            gl::BindTexture(gl::TEXTURE_2D, fb.scene_velocity);
+            set_int(self.post_shader, "uVelocity", 1);
+            gl::ActiveTexture(gl::TEXTURE2);
+            gl::BindTexture(gl::TEXTURE_2D, fb.history_color);
+            set_int(self.post_shader, "uHistory", 2);
             set_vec2(
                 self.post_shader,
                 "uTexelSize",
                 [1.0 / self.width as f32, 1.0 / self.height as f32],
             );
-            set_float(self.post_shader, "uNear", 0.1);
-            set_float(self.post_shader, "uFar", 500.0);
+            set_float(
+                self.post_shader,
+                "uTaaBlend",
+                if self.first_frame { 0.0 } else { 0.38 },
+            );
+
             gl::BindVertexArray(self.post_vao);
             gl::DrawArrays(gl::TRIANGLES, 0, 3);
             gl::BindVertexArray(0);
             gl::Enable(gl::DEPTH_TEST);
+
+            gl::BindFramebuffer(gl::READ_FRAMEBUFFER, fb.scene_fbo);
+            gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, fb.history_fbo);
+            gl::ReadBuffer(gl::COLOR_ATTACHMENT0);
+            gl::DrawBuffer(gl::COLOR_ATTACHMENT0);
+            gl::BlitFramebuffer(0, 0, w, h, 0, 0, w, h, gl::COLOR_BUFFER_BIT, gl::NEAREST);
+            gl::BindFramebuffer(gl::READ_FRAMEBUFFER, 0);
+            gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, 0);
         }
+
+        self.prev_view_proj = self.last_view_proj;
+        self.first_frame = false;
         self.in_scene = false;
         Ok(())
     }
@@ -991,7 +1297,7 @@ fn create_post_vao() -> u32 {
 }
 
 fn create_sky_vao() -> (u32, u32) {
-    let sky = crate::graphics::primitives::sky_dome(1.0, 32, 16);
+    let sky = crate::graphics::primitives::sky_dome(1.0, 48, 24);
     let mut vao = 0u32;
     let mut vbo = 0u32;
     let mut ebo = 0u32;
@@ -1062,6 +1368,45 @@ fn push_quad(verts: &mut Vec<f32>, x0: f32, y0: f32, x1: f32, y1: f32) {
 
 fn draw_hud_panels(r: &OpenGLRenderer, hud: &HudState) {
     let mut verts: Vec<f32> = Vec::with_capacity(512);
+
+    if hud.rock_hud {
+        let pulse = (hud.hud_time * 6.0).sin() * 0.5 + 0.5;
+        let charge_glow = hud.charge_pulse;
+
+        // Barra de força (esquerda)
+        push_quad(&mut verts, -0.98, -0.35, -0.72, -0.22);
+        let force = hud.force_bar.clamp(0.0, 1.0);
+        if force > 0.01 {
+            let r_col = 0.35 + force * 0.55 + charge_glow * 0.2;
+            let g_col = 0.55 + (1.0 - force) * 0.3;
+            push_quad(&mut verts, -0.96, -0.33, -0.96 + 0.22 * force, -0.24);
+            let _ = (r_col, g_col, pulse);
+        }
+
+        // Indicador de vento (topo centro)
+        push_quad(&mut verts, -0.12, 0.82, 0.12, 0.92);
+        let wind_fill = (hud.wind_strength / 12.0).clamp(0.0, 1.0);
+        push_quad(&mut verts, -0.1, 0.84, -0.1 + 0.18 * wind_fill, 0.9);
+
+        // Velocidade da pedra (cinemática)
+        if hud.cinematic_active && hud.rock_speed > 0.5 {
+            push_quad(&mut verts, 0.62, 0.78, 0.96, 0.9);
+            let spd = (hud.rock_speed / 45.0).clamp(0.0, 1.0);
+            push_quad(&mut verts, 0.64, 0.8, 0.64 + 0.28 * spd, 0.88);
+        }
+
+        // Combo pulse (canto superior direito)
+        if hud.combo_pulse > 0.01 {
+            let s = 0.04 + hud.combo_pulse * 0.03;
+            push_quad(
+                &mut verts,
+                0.82 - s,
+                0.72 - s,
+                0.82 + s,
+                0.72 + s,
+            );
+        }
+    }
 
     // Barra inferior do inventario
     push_quad(&mut verts, -0.52, -0.97, 0.52, -0.78);
@@ -1339,6 +1684,155 @@ fn draw_radar(r: &OpenGLRenderer, hud: &HudState) {
     }
 }
 
+fn create_hud_glyph_vao() -> (u32, u32) {
+    let mut vao = 0u32;
+    let mut vbo = 0u32;
+    unsafe {
+        gl::GenVertexArrays(1, &mut vao);
+        gl::GenBuffers(1, &mut vbo);
+        gl::BindVertexArray(vao);
+        gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+        gl::BufferData(gl::ARRAY_BUFFER, 65536, ptr::null(), gl::DYNAMIC_DRAW);
+        gl::EnableVertexAttribArray(0);
+        gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, 16, ptr::null());
+        gl::EnableVertexAttribArray(1);
+        gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, 16, 8 as *const _);
+        gl::BindVertexArray(0);
+    }
+    (vao, vbo)
+}
+
+fn draw_hud_ui_quad(
+    r: &OpenGLRenderer,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    color: [f32; 4],
+    accent: [f32; 4],
+    glow: f32,
+) {
+    let verts = [
+        x0, y0, 0.0, 0.0, x1, y0, 1.0, 0.0, x1, y1, 1.0, 1.0, x0, y0, 0.0, 0.0, x1, y1, 1.0, 1.0,
+        x0, y1, 0.0, 1.0,
+    ];
+    unsafe {
+        gl::UseProgram(r.hud_ui_shader);
+        set_vec4(r.hud_ui_shader, "uColor", color);
+        set_vec4(r.hud_ui_shader, "uAccent", accent);
+        set_float(r.hud_ui_shader, "uGlow", glow);
+        set_float(r.hud_ui_shader, "uTime", r.scene_time);
+        gl::BindVertexArray(r.hud_glyph_vao);
+        gl::BindBuffer(gl::ARRAY_BUFFER, r.hud_glyph_vbo);
+        gl::BufferSubData(gl::ARRAY_BUFFER, 0, (verts.len() * 4) as isize, verts.as_ptr() as *const _);
+        gl::DrawArrays(gl::TRIANGLES, 0, 6);
+    }
+}
+
+fn draw_hud_rock_aaa(r: &OpenGLRenderer, hud: &HudState) {
+    let pulse = (hud.hud_time * 5.0).sin() * 0.5 + 0.5;
+    let glow = 0.35 + hud.charge_pulse * 0.55 + pulse * 0.15;
+
+    draw_hud_ui_quad(
+        r,
+        -0.98,
+        -0.36,
+        -0.68,
+        -0.2,
+        [0.04, 0.05, 0.08, 0.82],
+        [0.15, 0.45, 0.75, 1.0],
+        glow * 0.5,
+    );
+    let force = hud.force_bar.clamp(0.0, 1.0);
+    if force > 0.01 {
+        draw_hud_ui_quad(
+            r,
+            -0.96,
+            -0.34,
+            -0.96 + 0.26 * force,
+            -0.22,
+            [0.25, 0.55, 0.95, 0.9],
+            [0.45, 0.85, 1.0, 1.0],
+            glow,
+        );
+    }
+
+    draw_hud_ui_quad(
+        r,
+        -0.14,
+        0.8,
+        0.14,
+        0.92,
+        [0.05, 0.07, 0.1, 0.78],
+        [0.35, 0.75, 0.55, 1.0],
+        0.4,
+    );
+    let wind = (hud.wind_strength / 12.0).clamp(0.0, 1.0);
+    draw_hud_ui_quad(
+        r,
+        -0.12,
+        0.82,
+        -0.12 + 0.22 * wind,
+        0.9,
+        [0.2, 0.75, 0.45, 0.88],
+        [0.4, 1.0, 0.6, 1.0],
+        0.55,
+    );
+
+    if hud.cinematic_active && hud.rock_speed > 0.5 {
+        draw_hud_ui_quad(
+            r,
+            0.6,
+            0.76,
+            0.98,
+            0.92,
+            [0.06, 0.05, 0.08, 0.8],
+            [1.0, 0.75, 0.25, 1.0],
+            0.65,
+        );
+    }
+}
+
+fn draw_hud_text_labels(r: &OpenGLRenderer, hud: &HudState) {
+    if hud.hud_texts.is_empty() || r.font_tex == 0 {
+        return;
+    }
+    unsafe {
+        gl::Enable(gl::BLEND);
+        gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+        gl::UseProgram(r.hud_text_shader);
+        bind_texture(r.textures.get(&r.font_tex), 0);
+        set_int(r.hud_text_shader, "uFont", 0);
+        set_float(r.hud_text_shader, "uGlow", 0.45);
+        gl::BindVertexArray(r.hud_glyph_vao);
+        gl::BindBuffer(gl::ARRAY_BUFFER, r.hud_glyph_vbo);
+
+        for label in &hud.hud_texts {
+            let layout = TextLayout::build(&label.text, label.x, label.y, label.size);
+            if layout.quads.is_empty() {
+                continue;
+            }
+            let mut verts: Vec<f32> = Vec::with_capacity(layout.quads.len() * 36);
+            for q in &layout.quads {
+                verts.extend_from_slice(&[
+                    q.x, q.y, q.u0, q.v0, q.x + q.w, q.y, q.u1, q.v0, q.x + q.w, q.y + q.h, q.u1,
+                    q.v1, q.x, q.y, q.u0, q.v0, q.x + q.w, q.y + q.h, q.u1, q.v1, q.x, q.y + q.h,
+                    q.u0, q.v1,
+                ]);
+            }
+            gl::BufferSubData(
+                gl::ARRAY_BUFFER,
+                0,
+                (verts.len() * 4) as isize,
+                verts.as_ptr() as *const _,
+            );
+            set_hud_color(r.hud_text_shader, label.color);
+            gl::DrawArrays(gl::TRIANGLES, 0, (layout.quads.len() * 6) as i32);
+        }
+        gl::BindVertexArray(0);
+    }
+}
+
 fn compile_hud_shader() -> Result<u32, OpenGLError> {
     compile_shader_program(
         r#"#version 330 core
@@ -1471,6 +1965,14 @@ unsafe fn set_vec3(program: u32, name: &str, v: [f32; 3]) {
     let loc = gl::GetUniformLocation(program, cname.as_ptr());
     if loc >= 0 {
         gl::Uniform3fv(loc, 1, v.as_ptr());
+    }
+}
+
+unsafe fn set_vec4(program: u32, name: &str, v: [f32; 4]) {
+    let cname = CString::new(name).unwrap();
+    let loc = gl::GetUniformLocation(program, cname.as_ptr());
+    if loc >= 0 {
+        gl::Uniform4fv(loc, 1, v.as_ptr());
     }
 }
 

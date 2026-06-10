@@ -51,9 +51,9 @@ impl BlockKind {
     pub fn model_id(self) -> &'static str {
         match self {
             BlockKind::Fence => "fence_post",
-            BlockKind::Dirt => "dirt_block",
-            BlockKind::Stone => "stone_block",
-            BlockKind::Wall => "stone_wall",
+            BlockKind::Dirt => "sand_pile",
+            BlockKind::Stone => "rock_prop_s",
+            BlockKind::Wall => "rock_wall",
             BlockKind::WoodWall => "wood_wall",
         }
     }
@@ -72,14 +72,7 @@ impl BlockKind {
     pub fn material(self) -> DrawMaterial {
         match self {
             BlockKind::Fence | BlockKind::WoodWall => DrawMaterial::wood(),
-            BlockKind::Dirt => DrawMaterial::Standard {
-                roughness: 0.95,
-                metallic: 0.0,
-            },
-            BlockKind::Stone | BlockKind::Wall => DrawMaterial::Standard {
-                roughness: 0.75,
-                metallic: 0.05,
-            },
+            BlockKind::Dirt | BlockKind::Stone | BlockKind::Wall => DrawMaterial::rock(),
         }
     }
 
@@ -275,7 +268,8 @@ pub fn sync_block_drawables(world: &mut GameWorld, blocks: &BlockGrid) {
     world.drawables.retain(|d| {
         !matches!(
             d.model_id.as_str(),
-            "fence_post" | "dirt_block" | "stone_block" | "stone_wall" | "wood_wall"
+            "fence_post" | "sand_pile" | "rock_prop_s" | "rock_wall" | "wood_wall"
+            | "dirt_block" | "stone_block" | "stone_wall"
         )
     });
     for (&key, &block) in &blocks.cells {

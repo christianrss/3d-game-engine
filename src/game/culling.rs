@@ -29,7 +29,8 @@ pub fn max_draw_distance(model_id: &str) -> f32 {
             120.0
         }
         "stream_water" => 90.0,
-        "target" | "fence_post" | "dirt_block" | "stone_block" | "stone_wall" | "wood_wall" => {
+        "target" | "fence_post" | "sand_pile" | "rock_prop_s" | "rock_wall" | "wood_wall"
+        | "dirt_block" | "stone_block" | "stone_wall" => {
             140.0
         }
         _ => 150.0,

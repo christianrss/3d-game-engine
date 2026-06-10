@@ -14,6 +14,8 @@ pub struct ViewModelAnimator {
     sway_pitch: f32,
     sway_vel_yaw: f32,
     sway_vel_pitch: f32,
+    /// Quando true, a mira vem só da câmera (FPS clássico) — sem sway duplicado do mouse.
+    rigid_fps: bool,
 }
 
 impl Default for ViewModelAnimator {
@@ -28,6 +30,7 @@ impl Default for ViewModelAnimator {
             sway_pitch: 0.0,
             sway_vel_yaw: 0.0,
             sway_vel_pitch: 0.0,
+            rigid_fps: false,
         }
     }
 }
@@ -36,6 +39,14 @@ impl ViewModelAnimator {
     pub fn with_muzzle(offset: Vec3) -> Self {
         Self {
             muzzle_local_offset: offset,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_rigid_fps(muzzle: Vec3) -> Self {
+        Self {
+            muzzle_local_offset: muzzle,
+            rigid_fps: true,
             ..Self::default()
         }
     }
@@ -55,9 +66,12 @@ impl ViewModelAnimator {
     }
 
     fn update_mouse_sway(&mut self, dt: f32, mouse_delta: (f32, f32)) {
-        const SENS: f32 = 0.0012;
-        const SPRING: f32 = 14.0;
-        const DAMP: f32 = 9.0;
+        if self.rigid_fps {
+            return;
+        }
+        const SENS: f32 = 0.0028;
+        const SPRING: f32 = 22.0;
+        const DAMP: f32 = 11.0;
 
         self.sway_vel_yaw -= mouse_delta.0 * SENS;
         self.sway_vel_pitch -= mouse_delta.1 * SENS;
@@ -72,8 +86,8 @@ impl ViewModelAnimator {
         self.sway_vel_yaw *= damp;
         self.sway_vel_pitch *= damp;
 
-        self.sway_yaw = self.sway_yaw.clamp(-0.12, 0.12);
-        self.sway_pitch = self.sway_pitch.clamp(-0.09, 0.09);
+        self.sway_yaw = self.sway_yaw.clamp(-0.22, 0.22);
+        self.sway_pitch = self.sway_pitch.clamp(-0.18, 0.18);
     }
 
     pub fn on_shoot(&mut self) {
@@ -96,9 +110,14 @@ impl ViewModelAnimator {
         let recoil_up = self.recoil * 0.025;
         let recoil_rot = Quat::from_rotation_x(self.recoil * 0.12);
 
-        let mouse_rot =
-            Quat::from_rotation_y(self.sway_yaw) * Quat::from_rotation_x(self.sway_pitch);
-        let mouse_pos = Vec3::new(self.sway_yaw * 0.22, self.sway_pitch * 0.18, 0.0);
+        let (mouse_rot, mouse_pos) = if self.rigid_fps {
+            (Quat::IDENTITY, Vec3::ZERO)
+        } else {
+            (
+                Quat::from_rotation_y(self.sway_yaw) * Quat::from_rotation_x(self.sway_pitch),
+                Vec3::new(self.sway_yaw * 0.38, self.sway_pitch * 0.32, self.sway_yaw * 0.04),
+            )
+        };
 
         let base_pos = Vec3::new(
             0.14 + idle_sway_x + mouse_pos.x,

@@ -1,13 +1,16 @@
 //! Upload de assets para a GPU no startup.
 
+use crate::assets::loader::load_texture;
 use crate::assets::AssetLibrary;
 use crate::graphics::renderer::{GfxRenderer, RendererError};
 use crate::graphics::{GpuMesh, GpuTexture};
 use std::collections::HashMap;
+use std::path::Path;
 
 pub struct GpuAssetCache {
     pub meshes: HashMap<String, GpuMesh>,
     pub viewmodel: GpuMesh,
+    pub fps_arm: GpuMesh,
     pub terrain: GpuMesh,
     pub sand_albedo: GpuTexture,
     pub sand_normal: GpuTexture,
@@ -25,9 +28,21 @@ impl GpuAssetCache {
     ) -> Result<Self, RendererError> {
         let mut meshes = HashMap::new();
         for (id, model) in &lib.models {
-            meshes.insert(id.clone(), renderer.upload_mesh(&model.mesh)?);
+            let mut gpu = renderer.upload_mesh(&model.mesh)?;
+            if let Some(ref tex_path) = model.texture_path {
+                if let Ok(tex_data) = load_texture(Path::new(tex_path)) {
+                    if let Ok(tex) = renderer.upload_texture(&tex_data) {
+                        gpu.albedo_tex = Some(tex.gpu_id);
+                    }
+                }
+            }
+            meshes.insert(id.clone(), gpu);
         }
         let viewmodel = renderer.upload_mesh(&lib.viewmodel.mesh)?;
+        let fps_arm = meshes
+            .get("fps_arm")
+            .cloned()
+            .ok_or_else(|| RendererError::Assets("fps_arm mesh missing".into()))?;
         let terrain = renderer.upload_mesh(&lib.terrain.mesh)?;
         let sand_albedo = renderer.upload_texture(&lib.sand_albedo)?;
         let sand_normal = renderer.upload_texture(&lib.sand_normal)?;
@@ -43,6 +58,7 @@ impl GpuAssetCache {
         Ok(Self {
             meshes,
             viewmodel,
+            fps_arm,
             terrain,
             sand_albedo,
             sand_normal,

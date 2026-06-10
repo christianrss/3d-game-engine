@@ -35,7 +35,8 @@ impl GlContext {
 
         let template = ConfigTemplateBuilder::new()
             .with_alpha_size(8)
-            .with_depth_size(24);
+            .with_depth_size(24)
+            .with_multisampling(4);
 
         let (window, gl_config) = DisplayBuilder::new()
             .with_window_attributes(Some(window_attrs))
@@ -45,7 +46,7 @@ impl GlContext {
                 |configs| {
                     configs
                         .filter(|c| c.depth_size() > 0)
-                        .min_by_key(|c| c.num_samples())
+                        .max_by_key(|c| c.num_samples())
                         .unwrap()
                 },
             )
@@ -105,6 +106,11 @@ impl GlContext {
             let name = CString::new(symbol).expect("CString::new failed");
             gl_display.get_proc_address(name.as_c_str()) as *const _
         });
+        if self.gl_config.num_samples() > 0 {
+            unsafe {
+                gl::Enable(gl::MULTISAMPLE);
+            }
+        }
     }
 
     pub fn resize(&self, width: u32, height: u32) {
