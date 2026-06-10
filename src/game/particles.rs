@@ -9,7 +9,7 @@ pub struct Particle {
     pub life: f32,
     pub max_life: f32,
     pub size: f32,
-    pub kind: u8, // 0 = smoke, 1 = dust
+    pub kind: u8, // 0 = smoke, 1 = dust, 2 = sand
 }
 
 #[derive(Default)]

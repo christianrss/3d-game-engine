@@ -65,14 +65,63 @@ pub fn load_gltf_viewmodel(path: impl AsRef<Path>, _name: &str) -> Result<Loaded
     })
 }
 
-pub fn load_gltf_model(path: impl AsRef<Path>, name: &str, scale: f32) -> Result<ModelAsset, String> {
-    let loaded = load_gltf_viewmodel(path, name)?;
+/// Carrega scan fotogramétrico / prop — assenta no chão (Y=0) e escala uniforme.
+pub fn load_gltf_prop(path: impl AsRef<Path>, target_size: f32) -> Result<ModelAsset, String> {
+    let path = path.as_ref();
+    let (mesh, texture_path) = load_gltf_raw(path)?;
+    let (min, max) = mesh_bounds(&mesh);
+    let extent = (max - min).max_element().max(0.001);
+    let scale = target_size / extent;
+    let center = (min + max) * 0.5;
+    let mesh = transform_mesh(
+        mesh,
+        Mat4::from_scale_rotation_translation(
+            Vec3::splat(scale),
+            Quat::IDENTITY,
+            Vec3::new(-center.x * scale, -min.y * scale, -center.z * scale),
+        ),
+    );
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "prop".into());
+    log::info!(
+        "glTF prop '{}' — {} vértices (fotogrametria)",
+        path.display(),
+        mesh.vertices.len()
+    );
     Ok(ModelAsset {
-        name: name.to_string(),
-        mesh: scale_mesh(loaded.mesh, scale),
-        texture_path: loaded.texture_path,
+        name,
+        mesh,
+        texture_path,
         tiling: 1.0,
     })
+}
+
+fn load_gltf_raw(path: &Path) -> Result<(Mesh, Option<String>), String> {
+    let (document, buffers, images) =
+        gltf::import(path).map_err(|e| format!("glTF {}: {e}", path.display()))?;
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let mut texture_path = None;
+    for scene in document.scenes() {
+        for node in scene.nodes() {
+            visit_node(
+                &node,
+                Mat4::IDENTITY,
+                &buffers,
+                &images,
+                path,
+                &mut vertices,
+                &mut indices,
+                &mut texture_path,
+            );
+        }
+    }
+    if vertices.is_empty() {
+        return Err(format!("glTF {}: sem geometria", path.display()));
+    }
+    Ok((Mesh { vertices, indices }, texture_path))
 }
 
 fn visit_node(

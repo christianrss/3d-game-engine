@@ -5,6 +5,7 @@
 
 pub mod context;
 pub mod renderer;
+mod sand_gpu;
 
 pub use context::GlContext;
 pub use renderer::{OpenGLError, OpenGLRenderer};

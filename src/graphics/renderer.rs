@@ -171,6 +171,87 @@ impl GfxRenderer {
         let _ = (albedo, normal, rough, ao);
     }
 
+    pub fn set_rock_textures(
+        &mut self,
+        albedo: &GpuTexture,
+        normal: &GpuTexture,
+        rough: &GpuTexture,
+    ) {
+        #[cfg(feature = "opengl")]
+        if let GfxRenderer::OpenGL(r) = self {
+            r.set_rock_textures(albedo, normal, rough);
+        }
+        let _ = (albedo, normal, rough);
+    }
+
+    pub fn set_scene_time(&mut self, t: f32) {
+        #[cfg(feature = "opengl")]
+        if let GfxRenderer::OpenGL(r) = self {
+            r.set_scene_time(t);
+        }
+        let _ = t;
+    }
+
+    pub fn set_day_night(&mut self, lighting: DayNightGpu) {
+        #[cfg(feature = "opengl")]
+        if let GfxRenderer::OpenGL(r) = self {
+            r.set_day_night(lighting);
+        }
+        let _ = lighting;
+    }
+
+    pub fn begin_planar_reflection(&mut self, camera: &Camera, plane_y: f32) -> Camera {
+        match self {
+            #[cfg(feature = "opengl")]
+            GfxRenderer::OpenGL(r) => r.begin_planar_reflection(camera, plane_y),
+            _ => camera.clone(),
+        }
+    }
+
+    pub fn end_planar_reflection(&mut self) {
+        #[cfg(feature = "opengl")]
+        if let GfxRenderer::OpenGL(r) = self {
+            r.end_planar_reflection();
+        }
+    }
+
+    pub fn draw_water(
+        &mut self,
+        camera: &Camera,
+        mesh: &GpuMesh,
+        model: Mat4,
+        shore_height: f32,
+    ) {
+        match self {
+            #[cfg(feature = "opengl")]
+            GfxRenderer::OpenGL(r) => r.draw_water(camera, mesh, model, shore_height),
+            _ => {}
+        }
+    }
+
+    pub fn sand_emit(&mut self, pos: crate::math::Vec3, vel: crate::math::Vec3, count: usize) {
+        #[cfg(feature = "opengl")]
+        if let GfxRenderer::OpenGL(r) = self {
+            r.sand_emit(pos, vel, count);
+        }
+        let _ = (pos, vel, count);
+    }
+
+    pub fn sand_update(&mut self, dt: f32, wind: crate::math::Vec3) {
+        #[cfg(feature = "opengl")]
+        if let GfxRenderer::OpenGL(r) = self {
+            r.sand_update(dt, wind);
+        }
+        let _ = (dt, wind);
+    }
+
+    pub fn sand_draw(&mut self, camera: &Camera) {
+        #[cfg(feature = "opengl")]
+        if let GfxRenderer::OpenGL(r) = self {
+            r.sand_draw(camera);
+        }
+    }
+
     pub fn begin_frame(&mut self, clear: Color) {
         match self {
             #[cfg(feature = "opengl")]
@@ -359,4 +440,46 @@ pub struct HudState {
     pub hit_flash: f32,
     /// Abertura da mira (0 = fechada, 1 = máxima dispersão).
     pub crosshair_spread: f32,
+    pub build_mode: bool,
+    pub day_hour: f32,
+    pub is_night: bool,
+    pub hotbar_index: u8,
+    pub fence_posts: u32,
+    pub dirt_blocks: u32,
+    pub stone_blocks: u32,
+    pub wall_blocks: u32,
+    pub wood_walls: u32,
+    pub wool: u32,
+    pub mutton: u32,
+    pub sheep_alive: u32,
+    pub sheep_herded: u32,
+    /// (angulo relativo, distancia normalizada 0-1, tipo)
+    pub radar_blips: Vec<(f32, f32, u8)>,
+    pub nearest_interact_m: f32,
+    pub hud_time: f32,
+    pub trade_visible: bool,
+    pub trade_selection: usize,
+    pub chunks_loaded: u32,
+    pub net_label: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DayNightGpu {
+    pub sun_dir: [f32; 3],
+    pub horizon: [f32; 3],
+    pub zenith: [f32; 3],
+    pub fog_color: [f32; 3],
+    pub night_factor: f32,
+}
+
+impl Default for DayNightGpu {
+    fn default() -> Self {
+        Self {
+            sun_dir: [-0.42, -0.78, -0.38],
+            horizon: [0.95, 0.68, 0.38],
+            zenith: [0.22, 0.48, 0.82],
+            fog_color: [0.92, 0.72, 0.48],
+            night_factor: 0.0,
+        }
+    }
 }

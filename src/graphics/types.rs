@@ -221,15 +221,21 @@ pub enum DrawMaterial {
     /// PBR padrão — roughness/metallic por objeto
     Standard { roughness: f32, metallic: f32 },
 
-    /// Terreno com mapas PBR completos
+    /// Terreno com mapas PBR completos + ripples de areia
     Terrain { tiling: f32 },
+
+    /// Rochas com textura triplanar PBR (Poly Haven)
+    Rock { tiling: f32 },
+
+    /// Lago/oásis — renderizado com shader de água
+    Water,
 
 }
 
 impl DrawMaterial {
 
     pub fn rock() -> Self {
-        Self::Standard { roughness: 0.82, metallic: 0.0 }
+        Self::Rock { tiling: 1.8 }
     }
 
     pub fn wood() -> Self {
@@ -275,6 +281,8 @@ pub struct ParticleDraw {
     pub size: f32,
 
     pub alpha: f32,
+
+    pub kind: f32,
 
 }
 

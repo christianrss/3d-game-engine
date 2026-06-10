@@ -4,6 +4,7 @@
 
 use crate::assets::sample_desert_height;
 use crate::game::desert::build_desert;
+use crate::game::physics::CollisionWorld;
 use crate::game::player::Player;
 use crate::game::world::GameWorld;
 use crate::math::Vec3;
@@ -23,7 +24,7 @@ impl SceneBuilder {
             use_desert: false,
             ground_size: 200.0,
             targets: Vec::new(),
-            player_spawn: Vec3::new(0.0, 1.7, 8.0),
+            player_spawn: Vec3::new(-30.0, 1.7, -35.0),
         }
     }
 
@@ -47,12 +48,13 @@ impl SceneBuilder {
         self
     }
 
-    /// Constrói o mundo e o jogador a partir da configuração.
-    pub fn build(self) -> (GameWorld, Player) {
+    /// Constrói o mundo, jogador e colisores estaticos.
+    pub fn build(self) -> (GameWorld, Player, CollisionWorld) {
         let mut world = GameWorld::default();
+        let mut collision = CollisionWorld::default();
 
         if self.use_desert {
-            build_desert(&mut world, self.ground_size);
+            collision = build_desert(&mut world);
         }
 
         for (pos, points, scale) in self.targets {
@@ -68,7 +70,7 @@ impl SceneBuilder {
             self.player_spawn.z,
         );
 
-        (world, player)
+        (world, player, collision)
     }
 }
 

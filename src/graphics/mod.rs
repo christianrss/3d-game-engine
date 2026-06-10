@@ -21,5 +21,5 @@ pub mod directx;
 pub use backend::{BackendKind, GfxBackend};
 pub use camera::Camera;
 pub use primitives::*;
-pub use renderer::{GfxRenderer, HudState, MeshCache};
+pub use renderer::{DayNightGpu, GfxRenderer, HudState, MeshCache};
 pub use types::{Color, DrawMaterial, GpuMesh, GpuTexture, Mesh, ParticleDraw, TextureData, Vertex};
